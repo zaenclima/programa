@@ -317,25 +317,37 @@ async function fetchAllRows(tabla, orderCol){
   return todos;
 }
 async function loadAll(){
-  const [veh, ofi] = await Promise.all([
-    supabaseClient.from('vehiculos').select('*').order('nombre'),
-    supabaseClient.from('oficina').select('*').eq('id',1).maybeSingle()
-  ]);
-  const [cli, rut, comb, odo, man] = await Promise.all([
-    fetchAllRows('clientes', 'nombre'),
-    fetchAllRows('rutas'),
-    fetchAllRows('combustible'),
-    fetchAllRows('odometro'),
-    fetchAllRows('mantenciones')
-  ]);
-  state.vehiculos = veh.data || [];
-  state.clientes = cli;
-  state.rutas = rut;
-  state.combustible = comb;
-  state.odometro = odo;
-  state.mantenciones = man;
-  state.oficina = ofi.data || null;
-  renderAll();
+  try{
+    const [veh, ofi] = await Promise.all([
+      supabaseClient.from('vehiculos').select('*').order('nombre'),
+      supabaseClient.from('oficina').select('*').eq('id',1).maybeSingle()
+    ]);
+    if(veh.error) throw veh.error;
+    if(ofi.error) throw ofi.error;
+    const [cli, rut, comb, odo, man] = await Promise.all([
+      fetchAllRows('clientes', 'nombre'),
+      fetchAllRows('rutas'),
+      fetchAllRows('combustible'),
+      fetchAllRows('odometro'),
+      fetchAllRows('mantenciones')
+    ]);
+    state.vehiculos = veh.data || [];
+    state.clientes = cli;
+    state.rutas = rut;
+    state.combustible = comb;
+    state.odometro = odo;
+    state.mantenciones = man;
+    state.oficina = ofi.data || null;
+    renderAll();
+  }catch(e){
+    document.getElementById('app-shell').innerHTML = `<div class="card" style="max-width:600px; margin:40px auto;">
+      <h2 style="color:var(--bad);">No se pudieron cargar los datos</h2>
+      <p>Tus datos probablemente siguen guardados en Supabase — esto es un error de conexión, no una pérdida de información.</p>
+      <p class="mono" style="font-size:12.5px; background:#F8F9FB; padding:10px; border-radius:8px;">${e.message || e}</p>
+      <button class="primary" onclick="location.reload()">Reintentar</button>
+    </div>`;
+    console.error(e);
+  }
 }
 
 // ---- GEOCODIFICACIÓN Y RUTAS (OpenStreetMap, gratis, sin llave) ----
