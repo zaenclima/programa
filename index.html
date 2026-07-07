@@ -301,22 +301,39 @@ async function initAuth(){
 }
 
 // ---- CARGA DE DATOS ----
+async function fetchAllRows(tabla, orderCol){
+  let todos = [];
+  let desde = 0;
+  const TAM = 1000;
+  while(true){
+    let q = supabaseClient.from(tabla).select('*').range(desde, desde+TAM-1);
+    if(orderCol) q = q.order(orderCol);
+    const { data, error } = await q;
+    if(error) throw error;
+    todos = todos.concat(data || []);
+    if(!data || data.length < TAM) break;
+    desde += TAM;
+  }
+  return todos;
+}
 async function loadAll(){
-  const [veh, cli, rut, comb, odo, man, ofi] = await Promise.all([
+  const [veh, ofi] = await Promise.all([
     supabaseClient.from('vehiculos').select('*').order('nombre'),
-    supabaseClient.from('clientes').select('*').order('nombre'),
-    supabaseClient.from('rutas').select('*'),
-    supabaseClient.from('combustible').select('*'),
-    supabaseClient.from('odometro').select('*'),
-    supabaseClient.from('mantenciones').select('*'),
     supabaseClient.from('oficina').select('*').eq('id',1).maybeSingle()
   ]);
+  const [cli, rut, comb, odo, man] = await Promise.all([
+    fetchAllRows('clientes', 'nombre'),
+    fetchAllRows('rutas'),
+    fetchAllRows('combustible'),
+    fetchAllRows('odometro'),
+    fetchAllRows('mantenciones')
+  ]);
   state.vehiculos = veh.data || [];
-  state.clientes = cli.data || [];
-  state.rutas = rut.data || [];
-  state.combustible = comb.data || [];
-  state.odometro = odo.data || [];
-  state.mantenciones = man.data || [];
+  state.clientes = cli;
+  state.rutas = rut;
+  state.combustible = comb;
+  state.odometro = odo;
+  state.mantenciones = man;
   state.oficina = ofi.data || null;
   renderAll();
 }
