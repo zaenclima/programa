@@ -113,6 +113,7 @@
         <div><label>Nombre / técnico asignado</label><input id="v-nombre" placeholder="Ej: Camioneta Juan"></div>
         <div><label>Patente</label><input id="v-patente" placeholder="Ej: ABCD-12"></div>
         <div><label>Rendimiento (km/litro)</label><input id="v-rendimiento" type="number" step="0.1" placeholder="Ej: 11.5"></div>
+        <div><label>Próxima revisión técnica</label><input id="v-revision" type="date"></div>
       </div>
       <div class="row-actions"><button class="primary" onclick="addVehiculo()">Agregar vehículo</button></div>
     </div>
@@ -250,6 +251,17 @@
 </main>
 </div><!-- /app-shell -->
 
+<div id="modal-revision" style="display:none; position:fixed; inset:0; background:rgba(20,39,63,.55); z-index:50; align-items:center; justify-content:center;">
+  <div style="background:#fff; border-radius:14px; padding:24px; width:100%; max-width:480px; max-height:80vh; overflow-y:auto; margin:16px;">
+    <h2 style="margin:0 0 4px; font-size:17px;">🔧 Revisión técnica próxima o vencida</h2>
+    <p style="color:var(--ink-soft); font-size:13px; margin:0 0 14px;">Estos vehículos necesitan atención. Marca los que ya tengan hora agendada o realizada.</p>
+    <div id="modal-revision-lista"></div>
+    <div class="row-actions" style="justify-content:flex-end;">
+      <button class="ghost" onclick="cerrarModalRevision()">Cerrar por ahora</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ======== CONFIGURACIÓN SUPABASE ========
 const SUPABASE_URL = 'https://oxjyviokosocqgaelgvp.supabase.co';
@@ -361,11 +373,12 @@ async function addVehiculo(){
   const nombre = document.getElementById('v-nombre').value.trim();
   const patente = document.getElementById('v-patente').value.trim();
   const rendimiento = parseFloat(document.getElementById('v-rendimiento').value);
+  const revision_tecnica = document.getElementById('v-revision').value || null;
   if(!nombre || !rendimiento){ alert('Falta el nombre o el rendimiento.'); return; }
-  const { data, error } = await supabaseClient.from('vehiculos').insert({nombre, patente, rendimiento}).select().single();
+  const { data, error } = await supabaseClient.from('vehiculos').insert({nombre, patente, rendimiento, revision_tecnica}).select().single();
   if(error){ alert('No se pudo guardar: '+error.message); return; }
   state.vehiculos.push(data);
-  document.getElementById('v-nombre').value=''; document.getElementById('v-patente').value=''; document.getElementById('v-rendimiento').value='';
+  document.getElementById('v-nombre').value=''; document.getElementById('v-patente').value=''; document.getElementById('v-rendimiento').value=''; document.getElementById('v-revision').value='';
   renderVehiculos(); fillSelects();
 }
 async function delVehiculo(id){
@@ -374,11 +387,21 @@ async function delVehiculo(id){
   state.vehiculos = state.vehiculos.filter(v=>v.id!==id);
   renderVehiculos(); fillSelects();
 }
+async function guardarRevisionVehiculo(id){
+  const val = document.getElementById('rev-input-'+id).value;
+  if(!val){ alert('Elige una fecha.'); return; }
+  const { error } = await supabaseClient.from('vehiculos').update({revision_tecnica: val}).eq('id', id);
+  if(error){ alert('No se pudo guardar: '+error.message); return; }
+  const v = state.vehiculos.find(x=>x.id===id);
+  if(v) v.revision_tecnica = val;
+  renderVehiculos();
+}
 function renderVehiculos(){
   const el = document.getElementById('lista-vehiculos');
   if(!state.vehiculos.length){ el.innerHTML='<p class="empty">Aún no agregas vehículos.</p>'; return; }
-  el.innerHTML = `<table><thead><tr><th>Nombre</th><th>Patente</th><th>Rendimiento</th><th></th></tr></thead><tbody>
+  el.innerHTML = `<table><thead><tr><th>Nombre</th><th>Patente</th><th>Rendimiento</th><th>Revisión técnica</th><th></th></tr></thead><tbody>
     ${state.vehiculos.map(v=>`<tr><td>${v.nombre}</td><td class="mono">${v.patente||'—'}</td><td class="mono">${v.rendimiento} km/l</td>
+    <td><div style="display:flex; gap:6px; align-items:center;"><input type="date" id="rev-input-${v.id}" value="${v.revision_tecnica||''}" style="max-width:150px;"><button class="ghost" onclick="guardarRevisionVehiculo('${v.id}')">Guardar</button></div></td>
     <td><span class="del" onclick="delVehiculo('${v.id}')">Eliminar</span></td></tr>`).join('')}
   </tbody></table>`;
 }
@@ -825,6 +848,49 @@ function fillSelects(){
   document.getElementById('dl-clientes').innerHTML = Object.keys(clienteLabelToId).map(l=>`<option value="${l}">`).join('');
 }
 
+// ---- RECORDATORIO DE REVISIÓN TÉCNICA ----
+function diasHasta(fechaIso){
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  const f = new Date(fechaIso+'T00:00:00');
+  return Math.round((f - hoy) / 86400000);
+}
+function revisarAlertasRevisionTecnica(){
+  const pendientes = state.vehiculos.filter(v=>v.revision_tecnica && diasHasta(v.revision_tecnica) <= 7);
+  const modal = document.getElementById('modal-revision');
+  const lista = document.getElementById('modal-revision-lista');
+  if(!pendientes.length){ modal.style.display='none'; return; }
+  lista.innerHTML = pendientes.map(v=>{
+    const dias = diasHasta(v.revision_tecnica);
+    const texto = dias < 0 ? `Vencida hace ${Math.abs(dias)} día(s)` : (dias===0 ? 'Vence hoy' : `Vence en ${dias} día(s)`);
+    const badge = dias < 0 ? 'bad' : (dias<=2 ? 'bad' : 'warn');
+    return `<div class="card" style="margin-bottom:10px; padding:12px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+        <div><strong>${v.nombre}</strong> <span class="mono" style="color:var(--ink-soft); font-size:12.5px;">(${v.patente||'—'})</span><br>
+        <span class="badge ${badge}">${texto}</span> <span class="mono" style="font-size:12px; color:var(--ink-soft);">— ${v.revision_tecnica}</span></div>
+      </div>
+      <div class="row-actions" style="margin-top:10px;">
+        <label style="margin:0;">Nueva fecha de próxima revisión:</label>
+        <input type="date" id="modal-fecha-${v.id}" style="max-width:150px;">
+        <button class="primary" onclick="marcarRevisionHecha('${v.id}')">Marcar como hecha</button>
+      </div>
+    </div>`;
+  }).join('');
+  modal.style.display = 'flex';
+}
+async function marcarRevisionHecha(id){
+  const val = document.getElementById('modal-fecha-'+id).value;
+  if(!val){ alert('Ingresa la nueva fecha de próxima revisión.'); return; }
+  const { error } = await supabaseClient.from('vehiculos').update({revision_tecnica: val}).eq('id', id);
+  if(error){ alert('No se pudo guardar: '+error.message); return; }
+  const v = state.vehiculos.find(x=>x.id===id);
+  if(v) v.revision_tecnica = val;
+  renderVehiculos();
+  revisarAlertasRevisionTecnica();
+}
+function cerrarModalRevision(){
+  document.getElementById('modal-revision').style.display='none';
+}
+
 function renderAll(){
   renderVehiculos(); renderClientes(); renderRutas(); renderCombustible(); renderOdometro(); renderMantenciones();
   fillSelects(); renderParadasTemp();
@@ -835,6 +901,7 @@ function renderAll(){
   }
   const hoy = new Date();
   document.getElementById('rs-mes').value = hoy.toISOString().slice(0,7);
+  revisarAlertasRevisionTecnica();
 }
 
 initAuth();
