@@ -153,10 +153,11 @@
       </div>
     </div>
     <div class="card">
-      <h2>Agregar dirección de cliente (uno por uno)</h2>
-      <p class="hint">Al guardar, el sistema busca la ubicación exacta automáticamente. Si no la encuentra, puedes dejar un km de ida como respaldo manual.</p>
+      <h2>Agregar dirección (cliente o proveedor)</h2>
+      <p class="hint">Al guardar, el sistema busca la ubicación exacta automáticamente. Marca "Proveedor" para las idas a comprar materiales (ferreterías, etc.) — así no se confunden con visitas a clientes.</p>
       <div class="grid">
-        <div><label>Nombre del cliente</label><input id="c-nombre" placeholder="Ej: Ferretería Sur"></div>
+        <div><label>Nombre</label><input id="c-nombre" placeholder="Ej: Ferretería Sur"></div>
+        <div><label>Tipo</label><select id="c-tipo"><option value="cliente">Cliente</option><option value="proveedor">Proveedor</option></select></div>
         <div style="grid-column:span 2;"><label>Dirección exacta</label><input id="c-direccion" placeholder="Ej: Av. Siempre Viva 123, Viña del Mar"></div>
         <div><label>Km de ida (respaldo manual)</label><input id="c-km" type="number" step="0.1" placeholder="Solo si falla la búsqueda"></div>
       </div>
@@ -509,6 +510,7 @@ async function importarClientes(){
 async function addCliente(){
   const nombre = document.getElementById('c-nombre').value.trim();
   const direccion = document.getElementById('c-direccion').value.trim();
+  const tipo = document.getElementById('c-tipo').value;
   const kmManual = parseFloat(document.getElementById('c-km').value) || null;
   const statusEl = document.getElementById('c-status');
   const btn = document.getElementById('btn-add-cliente');
@@ -529,7 +531,7 @@ async function addCliente(){
     statusEl.textContent = 'No se encontró en el mapa — se guardó en modo manual con el km ingresado.';
     statusEl.className='status-line err';
   }
-  const { data, error } = await supabaseClient.from('clientes').insert({nombre, direccion, rut:'', lat, lon, km_manual:kmManual, modo}).select().single();
+  const { data, error } = await supabaseClient.from('clientes').insert({nombre, direccion, rut:'', lat, lon, km_manual:kmManual, modo, tipo}).select().single();
   btn.disabled = false;
   if(error){ statusEl.textContent = 'Error al guardar: '+error.message; statusEl.className='status-line err'; return; }
   state.clientes.push(data);
@@ -557,8 +559,8 @@ function renderClientes(){
     if(c.modo==='manual') return '<span class="badge warn">Manual ('+(c.km_manual||0)+' km ida)</span>';
     return '<span class="badge bad">No encontrada</span>';
   };
-  el.innerHTML = `<table><thead><tr><th>Cliente</th><th>Dirección</th><th>Ubicación</th><th></th></tr></thead><tbody>
-    ${mostrar.map(c=>`<tr><td>${c.nombre}</td><td>${c.direccion}</td><td>${badgeFor(c)}</td>
+  el.innerHTML = `<table><thead><tr><th>Nombre</th><th>Tipo</th><th>Dirección</th><th>Ubicación</th><th></th></tr></thead><tbody>
+    ${mostrar.map(c=>`<tr><td>${c.nombre}</td><td>${c.tipo==='proveedor'?'<span class="badge info">🧰 Proveedor</span>':'Cliente'}</td><td>${c.direccion}</td><td>${badgeFor(c)}</td>
     <td><span class="del" onclick="delCliente('${c.id}')">Eliminar</span></td></tr>`).join('')}
   </tbody></table>
   ${total>LIMITE ? `<p class="save-note">Mostrando ${LIMITE} de ${total} resultados. Usa el buscador para encontrar clientes específicos.</p>` : ''}`;
@@ -584,7 +586,7 @@ function renderParadasTemp(){
   el.innerHTML = paradasTemp.map((cid,idx)=>{
     const esOficina = cid === '__OFICINA__';
     const c = esOficina ? null : state.clientes.find(x=>x.id===cid);
-    const nombre = esOficina ? '🏢 Oficina' : (c?c.nombre:'—');
+    const nombre = esOficina ? '🏢 Oficina' : (c ? (c.tipo==='proveedor'?'🧰 '+c.nombre:c.nombre) : '—');
     return `<div class="stop-row"><div class="n">${idx+1}</div><div class="name">${nombre}</div>
       <div class="stop-actions">
         <button class="icon" onclick="moverParada(${idx},-1)" title="Subir">↑</button>
@@ -950,7 +952,15 @@ function renderResumen(){
   if(!mes){ el.innerHTML='<p class="empty">Elige un mes para ver el resumen.</p>'; return; }
 
   const filas = state.vehiculos.map(v=>{
-    const kmTeorico = state.rutas.filter(x=>x.vehiculo_id===v.id && x.fecha.startsWith(mes)).reduce((s,x)=>s+Number(x.km),0);
+    const rutasMes = state.rutas.filter(x=>x.vehiculo_id===v.id && x.fecha.startsWith(mes));
+    const kmTeorico = rutasMes.reduce((s,x)=>s+Number(x.km),0);
+    const idasProveedor = rutasMes.reduce((s,r)=>{
+      const paradasProveedor = (r.paradas||[]).filter(cid=>{
+        const c = state.clientes.find(x=>x.id===cid);
+        return c && c.tipo==='proveedor';
+      });
+      return s + paradasProveedor.length;
+    }, 0);
     const kmReal = kmRealMes(v.id, mes);
     const cargasMes = state.combustible.filter(x=>x.vehiculo_id===v.id && x.fecha.startsWith(mes));
     const litrosMes = cargasMes.reduce((s,x)=>s+Number(x.litros),0);
@@ -985,7 +995,7 @@ function renderResumen(){
       else if(pctExcesoKm>=10){ badgeKm='warn'; textoKm='Atención'; }
     } else { badgeKm='info'; }
 
-    return {v, kmTeorico, kmReal, tieneOdometro, diferenciaKm, pctExcesoKm, litrosPorDiferenciaKm, litrosTrabajo, litrosMes, diferenciaLitros, pctExcesoLitros, badgeCombustible, textoCombustible, badgeKm, textoKm, litrosPersonalPagadoEmpresa, costoPersonalPagadoEmpresa, badgeClave, textoClave};
+    return {v, kmTeorico, kmReal, tieneOdometro, diferenciaKm, pctExcesoKm, litrosPorDiferenciaKm, litrosTrabajo, litrosMes, diferenciaLitros, pctExcesoLitros, badgeCombustible, textoCombustible, badgeKm, textoKm, litrosPersonalPagadoEmpresa, costoPersonalPagadoEmpresa, badgeClave, textoClave, idasProveedor};
   });
 
   const resumenClave = filas.map(f=>`<div class="card" style="margin-bottom:8px; padding:14px;">
@@ -1004,7 +1014,7 @@ function renderResumen(){
   <h2 style="font-size:14.5px; margin:16px 0 10px;">Detalle completo</h2>
   <table><thead><tr>
     <th>Vehículo</th><th>Km teórico (rutas)</th><th>Km real (odómetro)</th><th>Dif. km</th><th>Litros que implica</th><th>Estado km</th>
-    <th>Litros trabajo</th><th>Litros cargados</th><th>Estado combustible</th>
+    <th>Litros trabajo</th><th>Litros cargados</th><th>Estado combustible</th><th>Idas a proveedores</th>
   </tr></thead><tbody>
     ${filas.map(f=>`<tr>
       <td>${f.v.nombre}</td>
@@ -1016,6 +1026,7 @@ function renderResumen(){
       <td class="mono">${f.litrosTrabajo.toFixed(1)} L</td>
       <td class="mono">${f.litrosMes.toFixed(1)} L</td>
       <td><span class="badge ${f.badgeCombustible}">${f.textoCombustible}</span></td>
+      <td class="mono">${f.idasProveedor}</td>
     </tr>`).join('')}
   </tbody></table>
   <p class="save-note">"Litros trabajo" es lo que las rutas registradas necesitaban. Si "Litros cargados" es mayor, esa diferencia es sospechosa de cubrir uso personal — por eso se compara con el km sin explicar para armar el número clave de arriba.</p>`;
@@ -1037,8 +1048,8 @@ function fillSelects(){
   const usados = new Set();
   if(state.oficina){ clienteLabelToId['🏢 Oficina (vuelta a la base)'] = '__OFICINA__'; }
   state.clientes.forEach(c=>{
-    let label = c.nombre;
-    if(usados.has(label)) label = `${c.nombre} (${c.direccion.slice(0,25)})`;
+    let label = c.tipo==='proveedor' ? `🧰 ${c.nombre}` : c.nombre;
+    if(usados.has(label)) label = `${label} (${c.direccion.slice(0,25)})`;
     usados.add(label);
     clienteLabelToId[label] = c.id;
   });
