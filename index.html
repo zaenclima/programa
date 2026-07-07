@@ -166,6 +166,10 @@
     <div class="card">
       <h2>Direcciones guardadas</h2>
       <input id="c-buscar" placeholder="Buscar cliente por nombre..." style="margin-bottom:10px;" oninput="renderClientes()">
+      <div class="row-actions" style="margin-top:0; margin-bottom:10px;">
+        <button class="ghost" onclick="ubicarPendientesEnLote(30)">Ubicar los próximos 30 pendientes</button>
+        <span id="lote-status" class="status-line"></span>
+      </div>
       <div id="lista-clientes"></div>
     </div>
   </div>
@@ -555,9 +559,9 @@ function renderClientes(){
   const mostrar = filtrados.slice(0, LIMITE);
   const badgeFor = c => {
     if(c.modo==='auto') return '<span class="badge ok">Ubicada</span>';
-    if(c.modo==='pendiente') return '<span class="badge info">Por ubicar</span>';
+    if(c.modo==='pendiente') return `<span class="badge info">Por ubicar</span> <span class="ghost" style="cursor:pointer; font-size:11.5px;" onclick="ubicarClienteIndividual('${c.id}')">Ubicar ahora</span>`;
     if(c.modo==='manual') return '<span class="badge warn">Manual ('+(c.km_manual||0)+' km ida)</span>';
-    return '<span class="badge bad">No encontrada</span>';
+    return `<span class="badge bad">No encontrada</span> <span class="ghost" style="cursor:pointer; font-size:11.5px;" onclick="ubicarClienteIndividual('${c.id}')">Reintentar</span>`;
   };
   el.innerHTML = `<table><thead><tr><th>Nombre</th><th>Tipo</th><th>Dirección</th><th>Ubicación</th><th></th></tr></thead><tbody>
     ${mostrar.map(c=>`<tr><td>${c.nombre}</td><td>${c.tipo==='proveedor'?'<span class="badge info">🧰 Proveedor</span>':'Cliente'}</td><td>${c.direccion}</td><td>${badgeFor(c)}</td>
@@ -566,7 +570,37 @@ function renderClientes(){
   ${total>LIMITE ? `<p class="save-note">Mostrando ${LIMITE} de ${total} resultados. Usa el buscador para encontrar clientes específicos.</p>` : ''}`;
 }
 
-// ---- RUTAS ----
+async function ubicarClienteIndividual(id){
+  const c = state.clientes.find(x=>x.id===id);
+  if(!c) return;
+  try{
+    const geo = await geocodeAddress(c.direccion);
+    const { error } = await supabaseClient.from('clientes').update({lat:geo.lat, lon:geo.lon, modo:'auto'}).eq('id', id);
+    if(error) throw error;
+    c.lat = geo.lat; c.lon = geo.lon; c.modo = 'auto';
+  }catch(e){
+    c.modo = 'sin_ubicar';
+  }
+  renderClientes();
+}
+async function ubicarPendientesEnLote(cantidad){
+  const statusEl = document.getElementById('lote-status');
+  const pendientes = state.clientes.filter(c=>c.modo==='pendiente' || c.modo==='sin_ubicar').slice(0, cantidad);
+  if(!pendientes.length){ statusEl.textContent = 'No hay direcciones pendientes.'; statusEl.className='status-line ok'; return; }
+  for(let i=0;i<pendientes.length;i++){
+    const c = pendientes[i];
+    statusEl.textContent = `Ubicando ${i+1}/${pendientes.length}: ${c.nombre}...`; statusEl.className='status-line';
+    try{
+      const geo = await geocodeAddress(c.direccion);
+      await supabaseClient.from('clientes').update({lat:geo.lat, lon:geo.lon, modo:'auto'}).eq('id', c.id);
+      c.lat = geo.lat; c.lon = geo.lon; c.modo = 'auto';
+    }catch(e){ c.modo = 'sin_ubicar'; }
+    renderClientes();
+    if(i < pendientes.length-1) await sleep(1100); // respeta el límite del servicio de mapas gratuito
+  }
+  statusEl.textContent = `Listo: se intentó ubicar ${pendientes.length} direcciones. Revisa la lista para ver cuáles quedaron sin encontrar.`;
+  statusEl.className = 'status-line ok';
+}
 function agregarParada(){
   const input = document.getElementById('r-cliente-input');
   const label = input.value.trim();
@@ -689,8 +723,15 @@ async function calcularYGuardarRuta(){
       if(c && c.km_manual){ kmRespaldo += c.km_manual*2; continue; }
       const val = prompt(`No se pudo ubicar "${c ? c.nombre : 'un cliente'}" en el mapa. Ingresa los km de ida (un sentido) para este tramo, o deja vacío para omitirlo:`);
       const num = parseFloat(val);
-      if(!isNaN(num)) kmRespaldo += num*2;
+      if(!isNaN(num)){
+        kmRespaldo += num*2;
+        if(c){
+          c.km_manual = num; c.modo = 'manual';
+          await supabaseClient.from('clientes').update({km_manual:num, modo:'manual'}).eq('id', c.id);
+        }
+      }
     }
+    if(faltan.some(c=>c)) renderClientes();
     statusEl.textContent = 'Una o más direcciones no se pudieron ubicar — se usó un km estimado para esos tramos.';
     statusEl.className = 'status-line err';
     const kmAutoParte = clientesRuta.filter(c=>c && c.lat!=null);
