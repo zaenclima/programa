@@ -548,8 +548,10 @@ function renderParadasTemp(){
   const el = document.getElementById('stops-list');
   if(!paradasTemp.length){ el.innerHTML = '<p class="empty">Aún no agregas paradas para esta ruta.</p>'; return; }
   el.innerHTML = paradasTemp.map((cid,idx)=>{
-    const c = state.clientes.find(x=>x.id===cid);
-    return `<div class="stop-row"><div class="n">${idx+1}</div><div class="name">${c?c.nombre:'—'}</div>
+    const esOficina = cid === '__OFICINA__';
+    const c = esOficina ? null : state.clientes.find(x=>x.id===cid);
+    const nombre = esOficina ? '🏢 Oficina' : (c?c.nombre:'—');
+    return `<div class="stop-row"><div class="n">${idx+1}</div><div class="name">${nombre}</div>
       <div class="stop-actions">
         <button class="icon" onclick="moverParada(${idx},-1)" title="Subir">↑</button>
         <button class="icon" onclick="moverParada(${idx},1)" title="Bajar">↓</button>
@@ -585,7 +587,10 @@ async function calcularYGuardarRuta(){
   if(!state.oficina){ alert('Primero ubica la dirección de la oficina en la pestaña Direcciones.'); return; }
 
   btn.disabled = true;
-  const clientesRuta = paradasTemp.map(cid => state.clientes.find(c=>c.id===cid));
+  const clientesRuta = paradasTemp.map(cid => {
+    if(cid === '__OFICINA__') return { id:'__OFICINA__', nombre:'Oficina', lat: state.oficina.lat, lon: state.oficina.lon, modo:'auto' };
+    return state.clientes.find(c=>c.id===cid);
+  });
   const pendientes = clientesRuta.filter(c=>c && c.lat==null && c.modo!=='manual');
   for(let i=0;i<pendientes.length;i++){
     const c = pendientes[i];
@@ -644,7 +649,10 @@ function renderRutas(){
   el.innerHTML = `<table><thead><tr><th>Fecha</th><th>Vehículo</th><th>Paradas</th><th>Km</th><th></th></tr></thead><tbody>
     ${rows.map(r=>{
       const veh = state.vehiculos.find(x=>x.id===r.vehiculo_id);
-      const nombres = (r.paradas||[]).map(cid=>{ const c=state.clientes.find(x=>x.id===cid); return c?c.nombre:'—'; }).join(' → ');
+      const nombres = (r.paradas||[]).map(cid=>{
+        if(cid==='__OFICINA__') return '🏢 Oficina';
+        const c=state.clientes.find(x=>x.id===cid); return c?c.nombre:'—';
+      }).join(' → ');
       return `<tr><td class="mono">${r.fecha}</td><td>${veh?veh.nombre:'—'}</td><td>${nombres}${r.manual?' <span class="badge warn">estimado</span>':''}</td><td class="mono">${Number(r.km).toFixed(1)} km</td>
       <td><span class="del" onclick="delRuta('${r.id}')">Eliminar</span></td></tr>`;
     }).join('')}
@@ -856,6 +864,7 @@ function fillSelects(){
   document.getElementById('m-vehiculo').innerHTML = opciones || '<option value="">Sin vehículos</option>';
   clienteLabelToId = {};
   const usados = new Set();
+  if(state.oficina){ clienteLabelToId['🏢 Oficina (vuelta a la base)'] = '__OFICINA__'; }
   state.clientes.forEach(c=>{
     let label = c.nombre;
     if(usados.has(label)) label = `${c.nombre} (${c.direccion.slice(0,25)})`;
