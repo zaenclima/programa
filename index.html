@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Control de Combustible — Flota ZaEn</title>
+<title>Gestión KM — Flota ZaEn</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚗</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -72,7 +73,7 @@
 
 <div id="login-screen">
   <div class="box">
-    <h1>⛽ Control de Combustible — Flota</h1>
+    <h1>🚗 Gestión <span style="color:#E63946;">KM</span></h1>
     <p>ZaEn Climatización</p>
     <label>Correo</label>
     <input id="login-email" type="email" placeholder="tu@correo.cl">
@@ -86,7 +87,7 @@
 <div id="app-shell">
 <header>
   <div>
-    <h1>⛽ Control de Combustible — Flota</h1>
+    <h1>🚗 Gestión <span style="color:#E63946;">KM</span></h1>
     <p>Compara litros y kilómetros esperados contra lo real, por vehículo y por mes.</p>
   </div>
   <button class="logout" onclick="logout()">Cerrar sesión</button>
@@ -99,6 +100,7 @@
   <button data-tab="rutas">Rutas del día</button>
   <button data-tab="odometro">Odómetro</button>
   <button data-tab="mantenciones">Mantenciones</button>
+  <button data-tab="usopersonal">Uso Personal</button>
   <button data-tab="combustible">Combustible</button>
   <button data-tab="resumen">Resumen</button>
 </nav>
@@ -161,7 +163,11 @@
         <div style="grid-column:span 2;"><label>Dirección exacta</label><input id="c-direccion" placeholder="Ej: Av. Siempre Viva 123, Viña del Mar"></div>
         <div><label>Km de ida (respaldo manual)</label><input id="c-km" type="number" step="0.1" placeholder="Solo si falla la búsqueda"></div>
       </div>
-      <div class="row-actions"><button class="primary" id="btn-add-cliente" onclick="addCliente()">Agregar dirección</button><span id="c-status" class="status-line"></span></div>
+      <div class="row-actions">
+        <button class="primary" id="btn-add-cliente" onclick="addCliente()">Agregar dirección</button>
+        <button class="ghost" id="btn-cancelar-edicion-cliente" style="display:none;" onclick="cancelarEdicionCliente()">Cancelar edición</button>
+        <span id="c-status" class="status-line"></span>
+      </div>
     </div>
     <div class="card">
       <h2>Direcciones guardadas</h2>
@@ -191,7 +197,16 @@
             <datalist id="dl-clientes"></datalist>
             <button class="primary" onclick="agregarParada()" style="white-space:nowrap;">+ Agregar</button>
           </div>
+          <p class="ghost" style="display:inline-block; margin-top:6px; cursor:pointer; border:none; padding:0;" onclick="toggleParadaNueva()">¿No está en la lista? Agrégala aquí</p>
         </div>
+      </div>
+      <div id="parada-nueva-form" style="display:none; background:#F8F9FB; border:1px solid var(--line); border-radius:8px; padding:12px; margin-top:8px;">
+        <div class="grid">
+          <div><label>Nombre</label><input id="pn-nombre" placeholder="Ej: Ferretería El Roble"></div>
+          <div><label>Tipo</label><select id="pn-tipo"><option value="cliente">Cliente</option><option value="proveedor">Proveedor</option></select></div>
+          <div style="grid-column:span 2;"><label>Dirección exacta</label><input id="pn-direccion" placeholder="Ej: Av. Valparaíso 456, Viña del Mar"></div>
+        </div>
+        <div class="row-actions"><button class="primary" onclick="agregarParadaNueva()">Guardar y usar en esta ruta</button><span id="pn-status" class="status-line"></span></div>
       </div>
       <div class="stops-list" id="stops-list"></div>
       <p id="editando-aviso" class="status-line" style="display:none; color:var(--accent); font-weight:600;"></p>
@@ -247,6 +262,23 @@
     <div class="card"><h2>Historial de mantenciones</h2><div id="lista-mantenciones"></div></div>
   </div>
 
+  <!-- USO PERSONAL -->
+  <div class="tab" id="tab-usopersonal">
+    <div class="card">
+      <h2>Registrar km de uso personal</h2>
+      <p class="hint">Para cuando el técnico reconoce que usó el auto para algo personal, sin necesidad de decir a dónde fue. Este km se resta de lo "sin explicar" en el Resumen, ya que queda declarado.</p>
+      <div class="grid">
+        <div><label>Fecha</label><input id="up-fecha" type="date"></div>
+        <div><label>Vehículo</label><select id="up-vehiculo"></select></div>
+        <div><label>Técnico</label><select id="up-tecnico"><option value="">Sin especificar</option></select></div>
+        <div><label>Km personal</label><input id="up-km" type="number" step="0.1" placeholder="Ej: 25"></div>
+      </div>
+      <div class="grid" style="margin-top:10px;"><div style="grid-column:span 2;"><label>Nota — opcional</label><input id="up-nota" placeholder="Ej: fin de semana"></div></div>
+      <div class="row-actions"><button class="primary" onclick="addKmPersonal()">Registrar</button></div>
+    </div>
+    <div class="card"><h2>Historial</h2><div id="lista-km-personal"></div></div>
+  </div>
+
   <!-- COMBUSTIBLE -->
   <div class="tab" id="tab-combustible">
     <div class="card">
@@ -293,8 +325,9 @@ const SUPABASE_URL = 'https://oxjyviokosocqgaelgvp.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_Gkz1dJz94JpjrzqiAZdZLw_uHg_6roh';
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-let state = { vehiculos: [], clientes: [], rutas: [], combustible: [], odometro: [], mantenciones: [], tecnicos: [], oficina: null };
+let state = { vehiculos: [], clientes: [], rutas: [], combustible: [], odometro: [], mantenciones: [], tecnicos: [], kmPersonal: [], oficina: null };
 let paradasTemp = [];
+let tiemposTemp = []; // paralelo a paradasTemp: {desplazamiento, ejecucion} en minutos
 
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
 function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
@@ -349,13 +382,14 @@ async function loadAll(){
     ]);
     if(veh.error) throw veh.error;
     if(ofi.error) throw ofi.error;
-    const [cli, rut, comb, odo, man, tec] = await Promise.all([
+    const [cli, rut, comb, odo, man, tec, kmp] = await Promise.all([
       fetchAllRows('clientes', 'nombre'),
       fetchAllRows('rutas'),
       fetchAllRows('combustible'),
       fetchAllRows('odometro'),
       fetchAllRows('mantenciones'),
-      fetchAllRows('tecnicos', 'nombre')
+      fetchAllRows('tecnicos', 'nombre'),
+      fetchAllRows('km_personal')
     ]);
     state.vehiculos = veh.data || [];
     state.clientes = cli;
@@ -364,6 +398,7 @@ async function loadAll(){
     state.odometro = odo;
     state.mantenciones = man;
     state.tecnicos = tec;
+    state.kmPersonal = kmp;
     state.oficina = ofi.data || null;
     renderAll();
   }catch(e){
@@ -511,6 +546,28 @@ async function importarClientes(){
 }
 
 // ---- CLIENTES ----
+let editandoClienteId = null;
+function editarCliente(id){
+  const c = state.clientes.find(x=>x.id===id);
+  if(!c) return;
+  document.getElementById('c-nombre').value = c.nombre;
+  document.getElementById('c-tipo').value = c.tipo || 'cliente';
+  document.getElementById('c-direccion').value = c.direccion;
+  document.getElementById('c-km').value = c.km_manual || '';
+  editandoClienteId = id;
+  document.getElementById('btn-add-cliente').textContent = 'Guardar cambios';
+  document.getElementById('btn-cancelar-edicion-cliente').style.display = 'inline-block';
+  document.querySelector('[data-tab="clientes"]').click();
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+function cancelarEdicionCliente(){
+  editandoClienteId = null;
+  document.getElementById('c-nombre').value=''; document.getElementById('c-direccion').value=''; document.getElementById('c-km').value='';
+  document.getElementById('c-tipo').value = 'cliente';
+  document.getElementById('btn-add-cliente').textContent = 'Agregar dirección';
+  document.getElementById('btn-cancelar-edicion-cliente').style.display = 'none';
+  document.getElementById('c-status').textContent = '';
+}
 async function addCliente(){
   const nombre = document.getElementById('c-nombre').value.trim();
   const direccion = document.getElementById('c-direccion').value.trim();
@@ -519,6 +576,31 @@ async function addCliente(){
   const statusEl = document.getElementById('c-status');
   const btn = document.getElementById('btn-add-cliente');
   if(!nombre || !direccion){ alert('Completa nombre y dirección.'); return; }
+
+  if(editandoClienteId){
+    const cOriginal = state.clientes.find(x=>x.id===editandoClienteId);
+    const cambioDireccion = cOriginal && cOriginal.direccion !== direccion;
+    btn.disabled = true;
+    let lat = cOriginal.lat, lon = cOriginal.lon, modo = cOriginal.modo;
+    if(cambioDireccion){
+      statusEl.textContent = 'Dirección cambiada, ubicando de nuevo...'; statusEl.className='status-line';
+      try{
+        const geo = await geocodeAddress(direccion);
+        lat = geo.lat; lon = geo.lon; modo = 'auto';
+      }catch(e){
+        lat = null; lon = null; modo = kmManual ? 'manual' : 'pendiente';
+      }
+    }
+    const { data, error } = await supabaseClient.from('clientes').update({nombre, direccion, tipo, lat, lon, modo, km_manual:kmManual}).eq('id', editandoClienteId).select().single();
+    btn.disabled = false;
+    if(error){ statusEl.textContent = 'Error al guardar: '+error.message; statusEl.className='status-line err'; return; }
+    Object.assign(cOriginal, data);
+    statusEl.textContent = 'Cambios guardados ✓'; statusEl.className='status-line ok';
+    cancelarEdicionCliente();
+    renderClientes(); fillSelects();
+    return;
+  }
+
   btn.disabled = true;
   statusEl.textContent = 'Buscando ubicación...'; statusEl.className='status-line';
   let lat=null, lon=null, modo='auto';
@@ -548,6 +630,7 @@ async function delCliente(id){
   state.clientes = state.clientes.filter(c=>c.id!==id);
   renderClientes(); fillSelects();
 }
+
 function renderClientes(){
   const el = document.getElementById('lista-clientes');
   const buscarEl = document.getElementById('c-buscar');
@@ -565,7 +648,7 @@ function renderClientes(){
   };
   el.innerHTML = `<table><thead><tr><th>Nombre</th><th>Tipo</th><th>Dirección</th><th>Ubicación</th><th></th></tr></thead><tbody>
     ${mostrar.map(c=>`<tr><td>${c.nombre}</td><td>${c.tipo==='proveedor'?'<span class="badge info">🧰 Proveedor</span>':'Cliente'}</td><td>${c.direccion}</td><td>${badgeFor(c)}</td>
-    <td><span class="del" onclick="delCliente('${c.id}')">Eliminar</span></td></tr>`).join('')}
+      <td><span class="ghost" style="cursor:pointer; margin-right:8px;" onclick="editarCliente('${c.id}')">Editar</span><span class="del" onclick="delCliente('${c.id}')">Eliminar</span></td></tr>`).join('')}
   </tbody></table>
   ${total>LIMITE ? `<p class="save-note">Mostrando ${LIMITE} de ${total} resultados. Usa el buscador para encontrar clientes específicos.</p>` : ''}`;
 }
@@ -601,18 +684,56 @@ async function ubicarPendientesEnLote(cantidad){
   statusEl.textContent = `Listo: se intentó ubicar ${pendientes.length} direcciones. Revisa la lista para ver cuáles quedaron sin encontrar.`;
   statusEl.className = 'status-line ok';
 }
+function toggleParadaNueva(){
+  const div = document.getElementById('parada-nueva-form');
+  div.style.display = div.style.display==='none' ? 'block' : 'none';
+}
+async function agregarParadaNueva(){
+  const nombre = document.getElementById('pn-nombre').value.trim();
+  const direccion = document.getElementById('pn-direccion').value.trim();
+  const tipo = document.getElementById('pn-tipo').value;
+  const statusEl = document.getElementById('pn-status');
+  if(!nombre || !direccion){ alert('Completa nombre y dirección.'); return; }
+  statusEl.textContent = 'Ubicando...'; statusEl.className='status-line';
+  let lat=null, lon=null, modo='auto';
+  try{
+    const geo = await geocodeAddress(direccion);
+    lat = geo.lat; lon = geo.lon;
+  }catch(e){
+    modo = 'pendiente';
+  }
+  const { data, error } = await supabaseClient.from('clientes').insert({nombre, direccion, rut:'', lat, lon, km_manual:null, modo, tipo}).select().single();
+  if(error){ statusEl.textContent = 'No se pudo guardar: '+error.message; statusEl.className='status-line err'; return; }
+  state.clientes.push(data);
+  fillSelects(); renderClientes();
+  paradasTemp.push(data.id);
+  tiemposTemp.push({desplazamiento:null, ejecucion:null});
+  renderParadasTemp();
+  document.getElementById('pn-nombre').value=''; document.getElementById('pn-direccion').value='';
+  document.getElementById('parada-nueva-form').style.display = 'none';
+  statusEl.textContent = '';
+}
 function agregarParada(){
   const input = document.getElementById('r-cliente-input');
   const label = input.value.trim();
   if(!label){ alert('Escribe o elige un cliente.'); return; }
   const cid = clienteLabelToId[label];
   if(!cid){ alert('No encontré ese cliente exacto en la lista. Elige una opción del listado que aparece al escribir.'); return; }
-  paradasTemp.push(cid); input.value = ''; renderParadasTemp();
+  paradasTemp.push(cid);
+  tiemposTemp.push({desplazamiento:null, ejecucion:null});
+  input.value = '';
+  renderParadasTemp();
 }
-function quitarParada(idx){ paradasTemp.splice(idx,1); renderParadasTemp(); }
+function quitarParada(idx){ paradasTemp.splice(idx,1); tiemposTemp.splice(idx,1); renderParadasTemp(); }
 function moverParada(idx, dir){
   const nuevo = idx+dir; if(nuevo<0 || nuevo>=paradasTemp.length) return;
-  [paradasTemp[idx], paradasTemp[nuevo]] = [paradasTemp[nuevo], paradasTemp[idx]]; renderParadasTemp();
+  [paradasTemp[idx], paradasTemp[nuevo]] = [paradasTemp[nuevo], paradasTemp[idx]];
+  [tiemposTemp[idx], tiemposTemp[nuevo]] = [tiemposTemp[nuevo], tiemposTemp[idx]];
+  renderParadasTemp();
+}
+function actualizarTiempo(idx, campo, valor){
+  if(!tiemposTemp[idx]) tiemposTemp[idx] = {desplazamiento:null, ejecucion:null};
+  tiemposTemp[idx][campo] = valor === '' ? null : parseFloat(valor);
 }
 function renderParadasTemp(){
   const el = document.getElementById('stops-list');
@@ -621,7 +742,13 @@ function renderParadasTemp(){
     const esOficina = cid === '__OFICINA__';
     const c = esOficina ? null : state.clientes.find(x=>x.id===cid);
     const nombre = esOficina ? '🏢 Oficina' : (c ? (c.tipo==='proveedor'?'🧰 '+c.nombre:c.nombre) : '—');
-    return `<div class="stop-row"><div class="n">${idx+1}</div><div class="name">${nombre}</div>
+    const t = tiemposTemp[idx] || {desplazamiento:null, ejecucion:null};
+    return `<div class="stop-row" style="flex-wrap:wrap;">
+      <div class="n">${idx+1}</div><div class="name">${nombre}</div>
+      <div style="display:flex; gap:4px; align-items:center;">
+        <input type="number" min="0" placeholder="Desplaz. (min)" value="${t.desplazamiento??''}" oninput="actualizarTiempo(${idx},'desplazamiento',this.value)" style="width:110px; font-size:12.5px; padding:6px 8px;">
+        <input type="number" min="0" placeholder="Ejecución (min)" value="${t.ejecucion??''}" oninput="actualizarTiempo(${idx},'ejecucion',this.value)" style="width:110px; font-size:12.5px; padding:6px 8px;">
+      </div>
       <div class="stop-actions">
         <button class="icon" onclick="moverParada(${idx},-1)" title="Subir">↑</button>
         <button class="icon" onclick="moverParada(${idx},1)" title="Bajar">↓</button>
@@ -637,6 +764,7 @@ function editarRuta(id){
   document.getElementById('r-vehiculo').value = r.vehiculo_id;
   document.getElementById('r-tecnico').value = r.tecnico_id || '';
   paradasTemp = [...(r.paradas||[])];
+  tiemposTemp = paradasTemp.map((_,i)=> (r.tiempos && r.tiempos[i]) ? r.tiempos[i] : {desplazamiento:null, ejecucion:null});
   editandoRutaId = id;
   renderParadasTemp();
   document.getElementById('btn-calc-ruta').textContent = 'Recalcular y guardar cambios';
@@ -650,6 +778,7 @@ function editarRuta(id){
 function cancelarEdicionRuta(){
   editandoRutaId = null;
   paradasTemp = [];
+  tiemposTemp = [];
   renderParadasTemp();
   document.getElementById('btn-calc-ruta').textContent = 'Calcular km automáticamente y guardar';
   document.getElementById('btn-cancelar-edicion').style.display = 'none';
@@ -657,8 +786,9 @@ function cancelarEdicionRuta(){
   document.getElementById('r-status').textContent = '';
 }
 async function guardarRutaFinal(fecha, vehiculo_id, paradas, km, esManual, tecnico_id){
+  const tiempos = [...tiemposTemp];
   if(editandoRutaId){
-    const { data, error } = await supabaseClient.from('rutas').update({fecha, vehiculo_id, paradas:[...paradas], km, manual:esManual, tecnico_id: tecnico_id||null}).eq('id', editandoRutaId).select().single();
+    const { data, error } = await supabaseClient.from('rutas').update({fecha, vehiculo_id, paradas:[...paradas], km, manual:esManual, tecnico_id: tecnico_id||null, tiempos}).eq('id', editandoRutaId).select().single();
     if(error){ alert('No se pudo guardar los cambios: '+error.message); return; }
     const idx = state.rutas.findIndex(r=>r.id===editandoRutaId);
     if(idx>-1) state.rutas[idx] = data;
@@ -666,10 +796,10 @@ async function guardarRutaFinal(fecha, vehiculo_id, paradas, km, esManual, tecni
     renderRutas();
     return;
   }
-  const { data, error } = await supabaseClient.from('rutas').insert({fecha, vehiculo_id, paradas: [...paradas], km, manual: esManual, tecnico_id: tecnico_id||null}).select().single();
+  const { data, error } = await supabaseClient.from('rutas').insert({fecha, vehiculo_id, paradas: [...paradas], km, manual: esManual, tecnico_id: tecnico_id||null, tiempos}).select().single();
   if(error){ alert('No se pudo guardar la ruta: '+error.message); return; }
   state.rutas.push(data);
-  paradasTemp = []; renderParadasTemp(); renderRutas();
+  paradasTemp = []; tiemposTemp = []; renderParadasTemp(); renderRutas();
 }
 function guardarRutaManual(){
   const fecha = document.getElementById('r-fecha').value;
@@ -778,7 +908,7 @@ function renderRutas(){
   const el = document.getElementById('lista-rutas');
   if(!state.rutas.length){ el.innerHTML='<p class="empty">Aún no registras rutas.</p>'; return; }
   const rows = [...state.rutas].sort((a,b)=>b.fecha.localeCompare(a.fecha));
-  el.innerHTML = `<table><thead><tr><th>Fecha</th><th>Vehículo</th><th>Técnico</th><th>Paradas</th><th>Km</th><th></th></tr></thead><tbody>
+  el.innerHTML = `<table><thead><tr><th>Fecha</th><th>Vehículo</th><th>Técnico</th><th>Paradas</th><th>Km</th><th>Tiempo</th><th></th></tr></thead><tbody>
     ${rows.map(r=>{
       const veh = state.vehiculos.find(x=>x.id===r.vehiculo_id);
       const tec = state.tecnicos.find(x=>x.id===r.tecnico_id);
@@ -786,7 +916,11 @@ function renderRutas(){
         if(cid==='__OFICINA__') return '🏢 Oficina';
         const c=state.clientes.find(x=>x.id===cid); return c?c.nombre:'—';
       }).join(' → ');
-      return `<tr><td class="mono">${r.fecha}</td><td>${veh?veh.nombre:'—'}</td><td>${tec?tec.nombre:'—'}</td><td>${nombres}${r.manual?' <span class="badge warn">estimado</span>':''}</td><td class="mono">${Number(r.km).toFixed(1)} km</td>
+      const tiempos = r.tiempos || [];
+      const totalDespl = tiempos.reduce((s,t)=>s+(t&&t.desplazamiento?Number(t.desplazamiento):0),0);
+      const totalEjec = tiempos.reduce((s,t)=>s+(t&&t.ejecucion?Number(t.ejecucion):0),0);
+      const tiempoTexto = (totalDespl||totalEjec) ? `${totalDespl}min despl. / ${totalEjec}min ejec.` : '—';
+      return `<tr><td class="mono">${r.fecha}</td><td>${veh?veh.nombre:'—'}</td><td>${tec?tec.nombre:'—'}</td><td>${nombres}${r.manual?' <span class="badge warn">estimado</span>':''}</td><td class="mono">${Number(r.km).toFixed(1)} km</td><td class="mono" style="font-size:12px;">${tiempoTexto}</td>
       <td><span class="ghost" style="cursor:pointer; margin-right:8px;" onclick="editarRuta('${r.id}')">Editar</span><span class="del" onclick="delRuta('${r.id}')">Eliminar</span></td></tr>`;
     }).join('')}
   </tbody></table>`;
@@ -951,6 +1085,42 @@ function renderTecnicos(){
   </tbody></table>`;
 }
 
+// ---- USO PERSONAL (km reconocido sin justificar destino) ----
+async function addKmPersonal(){
+  const fecha = document.getElementById('up-fecha').value;
+  const vehiculo_id = document.getElementById('up-vehiculo').value;
+  const tecnico_id = document.getElementById('up-tecnico').value || null;
+  const km = parseFloat(document.getElementById('up-km').value);
+  const nota = document.getElementById('up-nota').value.trim() || null;
+  if(!fecha || !vehiculo_id || !km){ alert('Completa fecha, vehículo y km.'); return; }
+  const { data, error } = await supabaseClient.from('km_personal').insert({fecha, vehiculo_id, tecnico_id, km, nota}).select().single();
+  if(error){ alert('No se pudo guardar: '+error.message); return; }
+  state.kmPersonal.push(data);
+  document.getElementById('up-km').value=''; document.getElementById('up-nota').value='';
+  renderKmPersonal();
+}
+async function delKmPersonal(id){
+  await supabaseClient.from('km_personal').delete().eq('id', id);
+  state.kmPersonal = state.kmPersonal.filter(k=>k.id!==id);
+  renderKmPersonal();
+}
+function kmPersonalMes(vehiculo_id, mes){
+  return state.kmPersonal.filter(k=>k.vehiculo_id===vehiculo_id && k.fecha.startsWith(mes)).reduce((s,k)=>s+Number(k.km),0);
+}
+function renderKmPersonal(){
+  const el = document.getElementById('lista-km-personal');
+  if(!state.kmPersonal.length){ el.innerHTML='<p class="empty">Aún no registras km personal.</p>'; return; }
+  const rows = [...state.kmPersonal].sort((a,b)=>b.fecha.localeCompare(a.fecha));
+  el.innerHTML = `<table><thead><tr><th>Fecha</th><th>Vehículo</th><th>Técnico</th><th>Km</th><th>Nota</th><th></th></tr></thead><tbody>
+    ${rows.map(k=>{
+      const veh = state.vehiculos.find(x=>x.id===k.vehiculo_id);
+      const tec = state.tecnicos.find(x=>x.id===k.tecnico_id);
+      return `<tr><td class="mono">${k.fecha}</td><td>${veh?veh.nombre:'—'}</td><td>${tec?tec.nombre:'—'}</td><td class="mono">${Number(k.km).toFixed(1)} km</td><td>${k.nota||'—'}</td>
+      <td><span class="del" onclick="delKmPersonal('${k.id}')">Eliminar</span></td></tr>`;
+    }).join('')}
+  </tbody></table>`;
+}
+
 // ---- COMBUSTIBLE ----
 async function addCombustible(){
   const fecha = document.getElementById('f-fecha').value;
@@ -986,6 +1156,27 @@ function renderCombustible(){
 
 // ---- RESUMEN ----
 document.getElementById('rs-mes').addEventListener('change', renderResumen);
+function irARutaFaltante(vehiculo_id){
+  document.querySelector('[data-tab="rutas"]').click();
+  document.getElementById('r-vehiculo').value = vehiculo_id;
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+function mostrarFormJustificarPersonal(vehiculo_id, kmSugerido){
+  const div = document.getElementById('justificar-personal-'+vehiculo_id);
+  if(div) div.style.display = div.style.display==='none' ? 'block' : 'none';
+}
+async function guardarJustificacionPersonal(vehiculo_id){
+  const fecha = document.getElementById('jp-fecha-'+vehiculo_id).value;
+  const km = parseFloat(document.getElementById('jp-km-'+vehiculo_id).value);
+  const statusEl = document.getElementById('jp-status-'+vehiculo_id);
+  if(!fecha || !km){ alert('Completa fecha y km.'); return; }
+  const { data, error } = await supabaseClient.from('km_personal').insert({fecha, vehiculo_id, tecnico_id:null, km, nota:'Justificado desde el Resumen'}).select().single();
+  if(error){ statusEl.textContent = 'Error: '+error.message; statusEl.className='status-line err'; return; }
+  state.kmPersonal.push(data);
+  statusEl.textContent = 'Guardado ✓ recalculando...'; statusEl.className='status-line ok';
+  renderKmPersonal();
+  renderResumen();
+}
 function renderResumen(){
   const mes = document.getElementById('rs-mes').value;
   const el = document.getElementById('lista-resumen');
@@ -1009,9 +1200,11 @@ function renderResumen(){
     const precioPromedio = (costoMes>0 && litrosMes>0) ? (costoMes/litrosMes) : null;
 
     const litrosTrabajo = v.rendimiento ? (kmTeorico / v.rendimiento) : 0;
-    const diferenciaKm = kmReal - kmTeorico;
+    const kmPersonalDeclarado = kmPersonalMes(v.id, mes);
+    const kmJustificado = kmTeorico + kmPersonalDeclarado;
+    const diferenciaKm = kmReal - kmJustificado;
     const tieneOdometro = state.odometro.some(o=>o.vehiculo_id===v.id);
-    const pctExcesoKm = (tieneOdometro && kmTeorico>0) ? (diferenciaKm/kmTeorico*100) : null;
+    const pctExcesoKm = (tieneOdometro && kmJustificado>0) ? (diferenciaKm/kmJustificado*100) : null;
     const litrosPorDiferenciaKm = (tieneOdometro && diferenciaKm>0 && v.rendimiento) ? (diferenciaKm / v.rendimiento) : 0;
 
     // --- El número clave: litros de uso personal que la empresa pagó ---
@@ -1036,16 +1229,47 @@ function renderResumen(){
       else if(pctExcesoKm>=10){ badgeKm='warn'; textoKm='Atención'; }
     } else { badgeKm='info'; }
 
-    return {v, kmTeorico, kmReal, tieneOdometro, diferenciaKm, pctExcesoKm, litrosPorDiferenciaKm, litrosTrabajo, litrosMes, diferenciaLitros, pctExcesoLitros, badgeCombustible, textoCombustible, badgeKm, textoKm, litrosPersonalPagadoEmpresa, costoPersonalPagadoEmpresa, badgeClave, textoClave, idasProveedor};
+    return {v, kmTeorico, kmReal, kmPersonalDeclarado, kmJustificado, tieneOdometro, diferenciaKm, pctExcesoKm, litrosPorDiferenciaKm, litrosTrabajo, litrosMes, diferenciaLitros, pctExcesoLitros, badgeCombustible, textoCombustible, badgeKm, textoKm, litrosPersonalPagadoEmpresa, costoPersonalPagadoEmpresa, badgeClave, textoClave, idasProveedor};
   });
 
-  const resumenClave = filas.map(f=>`<div class="card" style="margin-bottom:8px; padding:14px;">
+  const resumenClave = filas.map(f=>{
+    const mostrarAcciones = f.tieneOdometro && f.diferenciaKm > 1;
+    return `<div class="card" style="margin-bottom:8px; padding:14px;">
     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
       <strong>${f.v.nombre}</strong>
       <span class="badge ${f.badgeClave}">${f.textoClave}</span>
     </div>
-    ${f.costoPersonalPagadoEmpresa ? `<p class="save-note" style="margin-top:6px;">Costo aproximado: <strong class="mono">$${Math.round(f.costoPersonalPagadoEmpresa).toLocaleString('es-CL')}</strong></p>` : ''}
-  </div>`).join('');
+    <div class="grid" style="margin-top:10px; grid-template-columns:repeat(3,1fr);">
+      <div class="box" style="background:#F8F9FB; border:1px solid var(--line); border-radius:8px; padding:10px;">
+        <div class="mono" style="font-size:17px; font-weight:800;">${f.kmTeorico.toFixed(1)} km</div>
+        <div style="font-size:11.5px; color:var(--ink-soft);">Rutas asignadas</div>
+      </div>
+      <div class="box" style="background:#F8F9FB; border:1px solid var(--line); border-radius:8px; padding:10px;">
+        <div class="mono" style="font-size:17px; font-weight:800;">${f.kmPersonalDeclarado.toFixed(1)} km</div>
+        <div style="font-size:11.5px; color:var(--ink-soft);">Km personal (declarado)</div>
+      </div>
+      <div class="box" style="background:${f.diferenciaKm>1?'var(--bad-bg)':'#F8F9FB'}; border:1px solid var(--line); border-radius:8px; padding:10px;">
+        <div class="mono" style="font-size:17px; font-weight:800; color:${f.diferenciaKm>1?'var(--bad)':'inherit'};">${f.tieneOdometro ? f.diferenciaKm.toFixed(1)+' km' : '—'}</div>
+        <div style="font-size:11.5px; color:var(--ink-soft);">Sin justificar</div>
+      </div>
+    </div>
+    ${f.costoPersonalPagadoEmpresa ? `<p class="save-note" style="margin-top:8px;">Costo aproximado del uso personal pagado por la empresa: <strong class="mono">$${Math.round(f.costoPersonalPagadoEmpresa).toLocaleString('es-CL')}</strong></p>` : ''}
+    ${mostrarAcciones ? `
+    <div class="row-actions" style="border-top:1px dashed var(--line); padding-top:10px; margin-top:10px;">
+      <span style="font-size:12.5px; color:var(--ink-soft);">Justificar estos ${f.diferenciaKm.toFixed(1)} km como:</span>
+      <button class="ghost" onclick="irARutaFaltante('${f.v.id}')">Fue una ruta de trabajo</button>
+      <button class="ghost" onclick="mostrarFormJustificarPersonal('${f.v.id}', ${f.diferenciaKm.toFixed(1)})">Fue uso personal</button>
+    </div>
+    <div id="justificar-personal-${f.v.id}" style="display:none; margin-top:10px; background:#F8F9FB; border:1px solid var(--line); border-radius:8px; padding:10px;">
+      <div class="grid">
+        <div><label>Fecha</label><input type="date" id="jp-fecha-${f.v.id}" value="${mes}-01"></div>
+        <div><label>Km personal a registrar</label><input type="number" step="0.1" id="jp-km-${f.v.id}" value="${f.diferenciaKm.toFixed(1)}"></div>
+      </div>
+      <p class="save-note" style="margin:6px 0 0;">Si solo una parte fue personal, borra este número y pon el que corresponda — el resto lo puedes justificar como ruta.</p>
+      <div class="row-actions"><button class="primary" onclick="guardarJustificacionPersonal('${f.v.id}')">Guardar</button><span id="jp-status-${f.v.id}" class="status-line"></span></div>
+    </div>` : ''}
+  </div>`;
+  }).join('');
 
   el.innerHTML = `
   <h2 style="font-size:14.5px; margin:0 0 10px;">🔎 ¿Cuánto uso personal pagó la empresa este mes?</h2>
@@ -1054,12 +1278,13 @@ function renderResumen(){
 
   <h2 style="font-size:14.5px; margin:16px 0 10px;">Detalle completo</h2>
   <table><thead><tr>
-    <th>Vehículo</th><th>Km teórico (rutas)</th><th>Km real (odómetro)</th><th>Dif. km</th><th>Litros que implica</th><th>Estado km</th>
+    <th>Vehículo</th><th>Km teórico (rutas)</th><th>Km personal declarado</th><th>Km real (odómetro)</th><th>Dif. km sin explicar</th><th>Litros que implica</th><th>Estado km</th>
     <th>Litros trabajo</th><th>Litros cargados</th><th>Estado combustible</th><th>Idas a proveedores</th>
   </tr></thead><tbody>
     ${filas.map(f=>`<tr>
       <td>${f.v.nombre}</td>
       <td class="mono">${f.kmTeorico.toFixed(1)} km</td>
+      <td class="mono">${f.kmPersonalDeclarado>0 ? f.kmPersonalDeclarado.toFixed(1)+' km' : '—'}</td>
       <td class="mono">${f.tieneOdometro ? f.kmReal.toFixed(1)+' km' : '—'}</td>
       <td class="mono">${f.pctExcesoKm!==null ? (f.diferenciaKm>=0?'+':'')+f.diferenciaKm.toFixed(1)+' km ('+f.pctExcesoKm.toFixed(0)+'%)' : '—'}</td>
       <td class="mono">${f.litrosPorDiferenciaKm>0 ? f.litrosPorDiferenciaKm.toFixed(1)+' L' : '—'}</td>
@@ -1070,7 +1295,8 @@ function renderResumen(){
       <td class="mono">${f.idasProveedor}</td>
     </tr>`).join('')}
   </tbody></table>
-  <p class="save-note">"Litros trabajo" es lo que las rutas registradas necesitaban. Si "Litros cargados" es mayor, esa diferencia es sospechosa de cubrir uso personal — por eso se compara con el km sin explicar para armar el número clave de arriba.</p>`;
+  <p class="save-note">"Km personal declarado" ya se suma como justificado — no genera alerta. "Dif. km sin explicar" es lo que queda después de descontar rutas de trabajo Y km personal declarado — esa es la señal real de algo no reconocido.<br>
+  "Litros trabajo" es lo que las rutas registradas necesitaban. Si "Litros cargados" es mayor, esa diferencia es sospechosa de cubrir uso personal — por eso se compara con el km sin explicar para armar el número clave de arriba.</p>`;
 }
 
 // ---- SELECTS ----
@@ -1081,10 +1307,12 @@ function fillSelects(){
   document.getElementById('f-vehiculo').innerHTML = opciones || '<option value="">Sin vehículos</option>';
   document.getElementById('o-vehiculo').innerHTML = opciones || '<option value="">Sin vehículos</option>';
   document.getElementById('m-vehiculo').innerHTML = opciones || '<option value="">Sin vehículos</option>';
+  document.getElementById('up-vehiculo').innerHTML = opciones || '<option value="">Sin vehículos</option>';
   const opcionesTec = '<option value="">Sin especificar</option>' + state.tecnicos.map(t=>`<option value="${t.id}">${t.nombre}</option>`).join('');
   document.getElementById('r-tecnico').innerHTML = opcionesTec;
   document.getElementById('o-tecnico').innerHTML = opcionesTec;
   document.getElementById('f-tecnico').innerHTML = opcionesTec;
+  document.getElementById('up-tecnico').innerHTML = opcionesTec;
   clienteLabelToId = {};
   const usados = new Set();
   if(state.oficina){ clienteLabelToId['🏢 Oficina (vuelta a la base)'] = '__OFICINA__'; }
@@ -1141,7 +1369,7 @@ function cerrarModalRevision(){
 }
 
 function renderAll(){
-  renderVehiculos(); renderClientes(); renderRutas(); renderCombustible(); renderOdometro(); renderMantenciones(); renderTecnicos();
+  renderVehiculos(); renderClientes(); renderRutas(); renderCombustible(); renderOdometro(); renderMantenciones(); renderTecnicos(); renderKmPersonal();
   fillSelects(); renderParadasTemp();
   if(state.oficina){
     document.getElementById('of-direccion').value = state.oficina.direccion;
