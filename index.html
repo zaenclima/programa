@@ -374,13 +374,30 @@
   </div>
 </div>
 
+<div id="modal-justificar-km" style="display:none; position:fixed; inset:0; background:rgba(20,39,63,.55); z-index:50; align-items:center; justify-content:center;">
+  <div style="background:#fff; border-radius:14px; padding:24px; width:100%; max-width:440px; margin:16px;">
+    <h2 style="margin:0 0 4px; font-size:17px;">📏 Hay una diferencia sin justificar</h2>
+    <p id="jk-resumen" style="color:var(--ink-soft); font-size:13.5px; margin:0 0 14px;"></p>
+    <div class="grid">
+      <div><label>Km a justificar</label><input type="number" step="0.1" id="jk-km"></div>
+      <div><label>Nota — opcional</label><input id="jk-nota" placeholder="Ej: retiro urgente de repuesto"></div>
+    </div>
+    <div class="row-actions">
+      <button class="primary" onclick="guardarDiferenciaComo('trabajo')">Fue trabajo</button>
+      <button class="ghost" onclick="guardarDiferenciaComo('personal')">Fue uso personal</button>
+      <button class="ghost" onclick="cerrarModalJustificarKm()">Cerrar por ahora</button>
+    </div>
+    <p id="jk-status" class="status-line"></p>
+  </div>
+</div>
+
 <script>
 // ======== CONFIGURACIÓN SUPABASE ========
 const SUPABASE_URL = 'https://oxjyviokosocqgaelgvp.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_Gkz1dJz94JpjrzqiAZdZLw_uHg_6roh';
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-let state = { vehiculos: [], clientes: [], rutas: [], combustible: [], odometro: [], mantenciones: [], tecnicos: [], kmPersonal: [], oficina: null, perfil: null };
+let state = { vehiculos: [], clientes: [], rutas: [], combustible: [], odometro: [], mantenciones: [], tecnicos: [], kmPersonal: [], ajustesRuta: [], oficina: null, perfil: null };
 let paradasTemp = [];
 let tiemposTemp = []; // paralelo a paradasTemp: {desplazamiento, ejecucion} en minutos
 
@@ -457,14 +474,15 @@ async function loadAll(){
     ]);
     if(veh.error) throw veh.error;
     if(ofi.error) throw ofi.error;
-    const [cli, rut, comb, odo, man, tec, kmp] = await Promise.all([
+    const [cli, rut, comb, odo, man, tec, kmp, ajr] = await Promise.all([
       fetchAllRows('clientes', 'nombre'),
       fetchAllRows('rutas'),
       fetchAllRows('combustible'),
       fetchAllRows('odometro'),
       fetchAllRows('mantenciones'),
       fetchAllRows('tecnicos', 'nombre'),
-      fetchAllRows('km_personal')
+      fetchAllRows('km_personal'),
+      fetchAllRows('ajustes_ruta')
     ]);
     state.vehiculos = veh.data || [];
     state.clientes = cli;
@@ -474,6 +492,7 @@ async function loadAll(){
     state.mantenciones = man;
     state.tecnicos = tec;
     state.kmPersonal = kmp;
+    state.ajustesRuta = ajr;
     state.oficina = ofi.data || null;
     renderAll();
   }catch(e){
@@ -1056,6 +1075,7 @@ async function addOdometro(){
     if(idx>-1) state.odometro[idx] = data;
     cancelarEdicionOdometro();
     renderOdometro(); renderMantenciones();
+    revisarDiferenciaOdometro(data);
     return;
   }
 
@@ -1064,6 +1084,7 @@ async function addOdometro(){
   state.odometro.push(data);
   document.getElementById('o-km-inicio').value=''; document.getElementById('o-km-termino').value='';
   renderOdometro(); renderMantenciones();
+  revisarDiferenciaOdometro(data);
 }
 async function delOdometro(id){
   await supabaseClient.from('odometro').delete().eq('id', id);
@@ -1080,9 +1101,58 @@ async function completarKmTermino(id){
   if(error){ alert('No se pudo guardar: '+error.message); return; }
   o.km_termino = km_termino; o.km = km;
   renderOdometro(); renderMantenciones();
+  revisarDiferenciaOdometro(o);
 }
 function kmRutasDelDia(vehiculo_id, fecha){
-  return state.rutas.filter(r=>r.vehiculo_id===vehiculo_id && r.fecha===fecha).reduce((s,r)=>s+Number(r.km),0);
+  const kmRutas = state.rutas.filter(r=>r.vehiculo_id===vehiculo_id && r.fecha===fecha).reduce((s,r)=>s+Number(r.km),0);
+  const kmAjustes = state.ajustesRuta.filter(a=>a.vehiculo_id===vehiculo_id && a.fecha===fecha).reduce((s,a)=>s+Number(a.km),0);
+  return kmRutas + kmAjustes;
+}
+function ajustesRutaMes(vehiculo_id, mes){
+  return state.ajustesRuta.filter(a=>a.vehiculo_id===vehiculo_id && a.fecha.startsWith(mes)).reduce((s,a)=>s+Number(a.km),0);
+}
+
+// ---- Justificar diferencia al cerrar el día (odómetro vs rutas) ----
+let jkContexto = null; // {fecha, vehiculo_id, tecnico_id}
+function revisarDiferenciaOdometro(o){
+  if(o.km_inicio==null || o.km_termino==null) return;
+  const recorrido = o.km_termino - o.km_inicio;
+  const kmRutas = kmRutasDelDia(o.vehiculo_id, o.fecha);
+  const diferencia = recorrido - kmRutas;
+  if(Math.abs(diferencia) < 1) return; // sin diferencia relevante
+  const veh = state.vehiculos.find(v=>v.id===o.vehiculo_id);
+  jkContexto = { fecha:o.fecha, vehiculo_id:o.vehiculo_id, tecnico_id:o.tecnico_id||null };
+  document.getElementById('jk-resumen').textContent =
+    `${veh?veh.nombre:'Este vehículo'} recorrió ${recorrido.toFixed(1)} km el ${o.fecha}, pero las rutas registradas ese día justifican ${kmRutas.toFixed(1)} km. Diferencia: ${diferencia.toFixed(1)} km.`;
+  document.getElementById('jk-km').value = Math.abs(diferencia).toFixed(1);
+  document.getElementById('jk-nota').value = '';
+  document.getElementById('jk-status').textContent = '';
+  document.getElementById('modal-justificar-km').style.display = 'flex';
+}
+function cerrarModalJustificarKm(){
+  document.getElementById('modal-justificar-km').style.display = 'none';
+  jkContexto = null;
+}
+async function guardarDiferenciaComo(tipo){
+  if(!jkContexto) return;
+  const km = parseFloat(document.getElementById('jk-km').value);
+  const nota = document.getElementById('jk-nota').value.trim() || null;
+  const statusEl = document.getElementById('jk-status');
+  if(!km){ alert('Ingresa el km a justificar.'); return; }
+  const { fecha, vehiculo_id, tecnico_id } = jkContexto;
+  if(tipo==='trabajo'){
+    const { data, error } = await supabaseClient.from('ajustes_ruta').insert({fecha, vehiculo_id, tecnico_id, km, motivo:nota}).select().single();
+    if(error){ statusEl.textContent = 'Error: '+error.message; statusEl.className='status-line err'; return; }
+    state.ajustesRuta.push(data);
+  } else {
+    const { data, error } = await supabaseClient.from('km_personal').insert({fecha, vehiculo_id, tecnico_id, km, nota}).select().single();
+    if(error){ statusEl.textContent = 'Error: '+error.message; statusEl.className='status-line err'; return; }
+    state.kmPersonal.push(data);
+    renderKmPersonal();
+  }
+  statusEl.textContent = 'Guardado ✓'; statusEl.className = 'status-line ok';
+  renderOdometro();
+  setTimeout(cerrarModalJustificarKm, 700);
 }
 function renderOdometro(){
   const el = document.getElementById('lista-odometro');
@@ -1419,7 +1489,7 @@ function renderResumen(){
 
   const filas = state.vehiculos.map(v=>{
     const rutasMes = state.rutas.filter(x=>x.vehiculo_id===v.id && x.fecha.startsWith(mes));
-    const kmTeorico = rutasMes.reduce((s,x)=>s+Number(x.km),0);
+    const kmTeorico = rutasMes.reduce((s,x)=>s+Number(x.km),0) + ajustesRutaMes(v.id, mes);
     const idasProveedor = rutasMes.reduce((s,r)=>{
       const paradasProveedor = (r.paradas||[]).filter(cid=>{
         const c = state.clientes.find(x=>x.id===cid);
