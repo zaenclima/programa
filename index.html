@@ -275,14 +275,15 @@
   <div class="tab" id="tab-odometro">
     <div class="card">
       <h2>Registrar lectura de odómetro</h2>
-      <p class="hint">Anota el kilometraje que marca el auto al iniciar el día. Con dos lecturas seguidas, el sistema calcula el km real recorrido.</p>
+      <p class="hint">Anota el km al iniciar y al terminar el día. Si aún no termina el día, puedes dejar el término en blanco y completarlo después.</p>
       <div class="grid">
         <div><label>Fecha</label><input id="o-fecha" type="date"></div>
         <div><label>Vehículo</label><select id="o-vehiculo"></select></div>
         <div><label>Técnico</label><select id="o-tecnico"><option value="">Sin especificar</option></select></div>
-        <div><label>Kilometraje del odómetro</label><input id="o-km" type="number" step="0.1" placeholder="Ej: 85320"></div>
+        <div><label>Km inicio del día</label><input id="o-km-inicio" type="number" step="0.1" placeholder="Ej: 85320"></div>
+        <div><label>Km término del día — opcional</label><input id="o-km-termino" type="number" step="0.1" placeholder="Ej: 85410"></div>
       </div>
-      <div class="row-actions"><button class="primary" onclick="addOdometro()">Registrar lectura</button></div>
+      <div class="row-actions"><button class="primary" onclick="addOdometro()">Registrar</button></div>
     </div>
     <div class="card"><h2>Historial de lecturas</h2><div id="lista-odometro"></div></div>
   </div>
@@ -1012,13 +1013,16 @@ async function addOdometro(){
   const fecha = document.getElementById('o-fecha').value;
   const vehiculo_id = document.getElementById('o-vehiculo').value;
   const tecnico_id = document.getElementById('o-tecnico').value || null;
-  const km = parseFloat(document.getElementById('o-km').value);
-  if(!fecha || !vehiculo_id || !km){ alert('Completa fecha, vehículo y kilometraje.'); return; }
+  const km_inicio = parseFloat(document.getElementById('o-km-inicio').value);
+  const km_terminoVal = document.getElementById('o-km-termino').value;
+  const km_termino = km_terminoVal ? parseFloat(km_terminoVal) : null;
+  if(!fecha || !vehiculo_id || !km_inicio){ alert('Completa fecha, vehículo y km de inicio.'); return; }
   if(state.odometro.some(o=>o.vehiculo_id===vehiculo_id && o.fecha===fecha)){ alert('Ya hay una lectura para ese vehículo en esa fecha.'); return; }
-  const { data, error } = await supabaseClient.from('odometro').insert({fecha, vehiculo_id, km, tecnico_id}).select().single();
+  const km = km_termino ?? km_inicio; // compatibilidad con mantenciones y otros cálculos que usan "km"
+  const { data, error } = await supabaseClient.from('odometro').insert({fecha, vehiculo_id, km, km_inicio, km_termino, tecnico_id}).select().single();
   if(error){ alert('No se pudo guardar: '+error.message); return; }
   state.odometro.push(data);
-  document.getElementById('o-km').value='';
+  document.getElementById('o-km-inicio').value=''; document.getElementById('o-km-termino').value='';
   renderOdometro(); renderMantenciones();
 }
 async function delOdometro(id){
@@ -1026,32 +1030,100 @@ async function delOdometro(id){
   state.odometro = state.odometro.filter(o=>o.id!==id);
   renderOdometro(); renderMantenciones();
 }
+async function completarKmTermino(id){
+  const val = document.getElementById('completar-termino-'+id).value;
+  const km_termino = parseFloat(val);
+  if(!km_termino){ alert('Ingresa el km de término.'); return; }
+  const o = state.odometro.find(x=>x.id===id);
+  const km = km_termino;
+  const { error } = await supabaseClient.from('odometro').update({km_termino, km}).eq('id', id);
+  if(error){ alert('No se pudo guardar: '+error.message); return; }
+  o.km_termino = km_termino; o.km = km;
+  renderOdometro(); renderMantenciones();
+}
+function kmRutasDelDia(vehiculo_id, fecha){
+  return state.rutas.filter(r=>r.vehiculo_id===vehiculo_id && r.fecha===fecha).reduce((s,r)=>s+Number(r.km),0);
+}
 function renderOdometro(){
   const el = document.getElementById('lista-odometro');
   if(!state.odometro.length){ el.innerHTML='<p class="empty">Aún no registras lecturas.</p>'; return; }
+  const porVehiculo = {};
+  state.odometro.forEach(o=>{ (porVehiculo[o.vehiculo_id] ??= []).push(o); });
+  Object.values(porVehiculo).forEach(arr=>arr.sort((a,b)=>a.fecha.localeCompare(b.fecha)));
+
   const rows = [...state.odometro].sort((a,b)=>b.fecha.localeCompare(a.fecha));
-  el.innerHTML = `<table><thead><tr><th>Fecha</th><th>Vehículo</th><th>Técnico</th><th>Km odómetro</th><th></th></tr></thead><tbody>
+  el.innerHTML = `<table><thead><tr><th>Fecha</th><th>Vehículo</th><th>Técnico</th><th>Km inicio</th><th>Km término</th><th>Recorrido del día</th><th>vs Rutas del día</th><th>Hasta el siguiente registro</th><th></th></tr></thead><tbody>
     ${rows.map(o=>{
       const veh = state.vehiculos.find(x=>x.id===o.vehiculo_id);
       const tec = state.tecnicos.find(x=>x.id===o.tecnico_id);
-      return `<tr><td class="mono">${o.fecha}</td><td>${veh?veh.nombre:'—'}</td><td>${tec?tec.nombre:'—'}</td><td class="mono">${Number(o.km).toLocaleString('es-CL')} km</td>
+
+      const kmTermTexto = (o.km_termino!=null) ? Number(o.km_termino).toLocaleString('es-CL')+' km'
+        : `<div style="display:flex; gap:4px;"><input type="number" step="0.1" id="completar-termino-${o.id}" placeholder="km" style="width:90px;"><button class="ghost" onclick="completarKmTermino('${o.id}')">Guardar</button></div>`;
+
+      let recorridoTexto = '—', vsRutasTexto = '—';
+      if(o.km_inicio!=null && o.km_termino!=null){
+        const recorrido = o.km_termino - o.km_inicio;
+        recorridoTexto = recorrido.toFixed(1)+' km';
+        const kmRutas = kmRutasDelDia(o.vehiculo_id, o.fecha);
+        const dif = recorrido - kmRutas;
+        const pct = kmRutas>0 ? (dif/kmRutas*100) : (recorrido>0?100:0);
+        let badge = 'ok';
+        if(pct>=25) badge='bad'; else if(pct>=10) badge='warn';
+        vsRutasTexto = `<span class="badge ${badge}">${dif>=0?'+':''}${dif.toFixed(1)} km (rutas: ${kmRutas.toFixed(1)})</span>`;
+      }
+
+      // hueco hacia el siguiente registro (noche/fin de semana)
+      let huecoTexto = '—';
+      const arr = porVehiculo[o.vehiculo_id];
+      const idx = arr.findIndex(x=>x.id===o.id);
+      const siguiente = arr[idx+1];
+      if(o.km_termino!=null && siguiente && siguiente.km_inicio!=null){
+        const hueco = siguiente.km_inicio - o.km_termino;
+        const dias = Math.round((new Date(siguiente.fecha) - new Date(o.fecha)) / 86400000);
+        const etiqueta = dias>1 ? `hasta ${siguiente.fecha} (fin de semana / ${dias} días)` : `hasta ${siguiente.fecha}`;
+        let badge = 'ok';
+        if(hueco>=25) badge='bad'; else if(hueco>=10) badge='warn';
+        huecoTexto = `<span class="badge ${badge}">${hueco>=0?'+':''}${hueco.toFixed(1)} km</span><br><span style="font-size:11px; color:var(--ink-soft);">${etiqueta}</span>`;
+      }
+
+      return `<tr><td class="mono">${o.fecha}</td><td>${veh?veh.nombre:'—'}</td><td>${tec?tec.nombre:'—'}</td>
+      <td class="mono">${o.km_inicio!=null?Number(o.km_inicio).toLocaleString('es-CL')+' km':'—'}</td>
+      <td class="mono">${kmTermTexto}</td>
+      <td class="mono">${recorridoTexto}</td>
+      <td>${vsRutasTexto}</td>
+      <td>${huecoTexto}</td>
       <td><span class="del" onclick="delOdometro('${o.id}')">Eliminar</span></td></tr>`;
     }).join('')}
-  </tbody></table>`;
+  </tbody></table>
+  <p class="save-note">"vs Rutas del día" compara lo recorrido ese día contra el km teórico de las rutas registradas ese mismo día. "Hasta el siguiente registro" muestra el km recorrido entre el término de un día y el inicio del siguiente registrado — ahí es donde aparecería el uso de noche o de fin de semana.</p>`;
 }
 function kmRealMes(vehiculo_id, mes){
   const lecturas = state.odometro.filter(o=>o.vehiculo_id===vehiculo_id).sort((a,b)=>a.fecha.localeCompare(b.fecha));
   let total = 0;
-  for(let i=1;i<lecturas.length;i++){
-    const diff = lecturas[i].km - lecturas[i-1].km;
-    if(diff < 0) continue;
-    if(lecturas[i].fecha.startsWith(mes)) total += diff;
+  for(let i=0;i<lecturas.length;i++){
+    const o = lecturas[i];
+    // km recorrido dentro del propio día (si hay inicio y término)
+    if(o.km_inicio!=null && o.km_termino!=null && o.fecha.startsWith(mes)){
+      total += (o.km_termino - o.km_inicio);
+    }
+    // hueco hacia el siguiente registro (se atribuye al mes del registro siguiente)
+    const siguiente = lecturas[i+1];
+    if(siguiente){
+      const finDia = o.km_termino ?? o.km; // compatibilidad con lecturas antiguas de un solo valor
+      const inicioSig = siguiente.km_inicio ?? siguiente.km;
+      if(finDia!=null && inicioSig!=null){
+        const hueco = inicioSig - finDia;
+        if(hueco>=0 && siguiente.fecha.startsWith(mes)) total += hueco;
+      }
+    }
   }
   return total;
 }
 function kmActual(vehiculo_id){
   const lecturas = state.odometro.filter(o=>o.vehiculo_id===vehiculo_id).sort((a,b)=>b.fecha.localeCompare(a.fecha));
-  return lecturas.length ? lecturas[0].km : null;
+  if(!lecturas.length) return null;
+  const ultima = lecturas[0];
+  return ultima.km_termino ?? ultima.km_inicio ?? ultima.km;
 }
 
 // ---- MANTENCIONES ----
