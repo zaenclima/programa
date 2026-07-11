@@ -177,7 +177,11 @@
         <div><label>Nombre</label><input id="t-nombre" placeholder="Ej: Juan Pérez"></div>
         <div style="grid-column:span 2;"><label>Dirección de su casa</label><input id="t-direccion" placeholder="Ej: Calle Los Aromos 234, Concón"></div>
       </div>
-      <div class="row-actions"><button class="primary" onclick="addTecnico()">Agregar técnico</button><span id="t-status" class="status-line"></span></div>
+      <div class="row-actions">
+        <button class="primary" id="btn-add-tecnico" onclick="addTecnico()">Agregar técnico</button>
+        <button class="ghost" id="btn-cancelar-edicion-tecnico" style="display:none;" onclick="cancelarEdicionTecnico()">Cancelar edición</button>
+        <span id="t-status" class="status-line"></span>
+      </div>
     </div>
     <div class="card"><h2>Técnicos registrados</h2><div id="lista-tecnicos"></div></div>
   </div>
@@ -1196,14 +1200,41 @@ function renderMantenciones(){
 }
 
 // ---- TÉCNICOS ----
+let editandoTecnicoId = null;
+function editarTecnico(id){
+  const t = state.tecnicos.find(x=>x.id===id);
+  if(!t) return;
+  document.getElementById('t-nombre').value = t.nombre;
+  document.getElementById('t-direccion').value = t.casa_direccion || '';
+  editandoTecnicoId = id;
+  document.getElementById('btn-add-tecnico').textContent = 'Guardar cambios';
+  document.getElementById('btn-cancelar-edicion-tecnico').style.display = 'inline-block';
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+function cancelarEdicionTecnico(){
+  editandoTecnicoId = null;
+  document.getElementById('t-nombre').value = '';
+  document.getElementById('t-direccion').value = '';
+  document.getElementById('btn-add-tecnico').textContent = 'Agregar técnico';
+  document.getElementById('btn-cancelar-edicion-tecnico').style.display = 'none';
+  document.getElementById('t-status').textContent = '';
+}
 async function addTecnico(){
   const nombre = document.getElementById('t-nombre').value.trim();
   const direccion = document.getElementById('t-direccion').value.trim();
   const statusEl = document.getElementById('t-status');
   if(!nombre){ alert('Ingresa el nombre.'); return; }
-  let casa_lat=null, casa_lon=null, km_casa_oficina=null;
-  if(direccion){
-    if(!state.oficina){ alert('Primero ubica la oficina en la pestaña Direcciones (para poder calcular el trayecto).'); return; }
+
+  const editando = !!editandoTecnicoId;
+  const original = editando ? state.tecnicos.find(x=>x.id===editandoTecnicoId) : null;
+  const direccionCambio = !editando || direccion !== (original.casa_direccion||'');
+
+  let casa_lat = editando ? original.casa_lat : null;
+  let casa_lon = editando ? original.casa_lon : null;
+  let km_casa_oficina = editando ? original.km_casa_oficina : null;
+
+  if(direccion && direccionCambio){
+    if(!state.oficina){ alert('Primero ubica la oficina en Parámetros → Direcciones (para poder calcular el trayecto).'); return; }
     statusEl.textContent = 'Ubicando su casa...'; statusEl.className='status-line';
     try{
       const geo = await geocodeAddress(direccion);
@@ -1211,15 +1242,29 @@ async function addTecnico(){
       const km = await calcularRutaKm([{lat:state.oficina.lat, lon:state.oficina.lon}, {lat:geo.lat, lon:geo.lon}]);
       casa_lat = geo.lat; casa_lon = geo.lon; km_casa_oficina = km;
     }catch(e){
-      statusEl.textContent = 'No se pudo ubicar la dirección — el técnico se guardó igual, puedes editar la casa después.';
+      casa_lat = null; casa_lon = null; km_casa_oficina = null;
+      statusEl.textContent = 'No se pudo ubicar la dirección — se guardó igual, puedes reintentar editando de nuevo.';
       statusEl.className='status-line err';
     }
+  } else if(!direccion){
+    casa_lat = null; casa_lon = null; km_casa_oficina = null;
   }
+
+  if(editando){
+    const { data, error } = await supabaseClient.from('tecnicos').update({nombre, casa_direccion:direccion||null, casa_lat, casa_lon, km_casa_oficina}).eq('id', editandoTecnicoId).select().single();
+    if(error){ alert('No se pudo guardar: '+error.message); return; }
+    Object.assign(original, data);
+    cancelarEdicionTecnico();
+    if(!statusEl.textContent){ statusEl.textContent = 'Cambios guardados ✓'; statusEl.className='status-line ok'; }
+    renderTecnicos(); fillSelects();
+    return;
+  }
+
   const { data, error } = await supabaseClient.from('tecnicos').insert({nombre, casa_direccion:direccion||null, casa_lat, casa_lon, km_casa_oficina}).select().single();
   if(error){ alert('No se pudo guardar: '+error.message); return; }
   state.tecnicos.push(data);
   document.getElementById('t-nombre').value=''; document.getElementById('t-direccion').value='';
-  if(!statusEl.textContent || statusEl.className.includes('status-line') && !statusEl.className.includes('err')){ statusEl.textContent = 'Técnico guardado ✓'; statusEl.className='status-line ok'; }
+  if(!statusEl.textContent){ statusEl.textContent = 'Técnico guardado ✓'; statusEl.className='status-line ok'; }
   renderTecnicos(); fillSelects();
 }
 async function delTecnico(id){
@@ -1234,7 +1279,7 @@ function renderTecnicos(){
   el.innerHTML = `<table><thead><tr><th>Nombre</th><th>Casa</th><th>Km fijo casa↔oficina</th><th></th></tr></thead><tbody>
     ${state.tecnicos.map(t=>`<tr><td>${t.nombre}</td><td>${t.casa_direccion||'<span class="badge info">Sin registrar</span>'}</td>
     <td class="mono">${t.km_casa_oficina?Number(t.km_casa_oficina).toFixed(1)+' km':'—'}</td>
-    <td><span class="del" onclick="delTecnico('${t.id}')">Eliminar</span></td></tr>`).join('')}
+    <td><span class="ghost" style="cursor:pointer; margin-right:8px;" onclick="editarTecnico('${t.id}')">Editar</span><span class="del" onclick="delTecnico('${t.id}')">Eliminar</span></td></tr>`).join('')}
   </tbody></table>`;
 }
 
