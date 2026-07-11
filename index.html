@@ -287,7 +287,10 @@
         <div><label>Km inicio del día</label><input id="o-km-inicio" type="number" step="0.1" placeholder="Ej: 85320"></div>
         <div><label>Km término del día — opcional</label><input id="o-km-termino" type="number" step="0.1" placeholder="Ej: 85410"></div>
       </div>
-      <div class="row-actions"><button class="primary" onclick="addOdometro()">Registrar</button></div>
+      <div class="row-actions">
+        <button class="primary" id="btn-add-odometro" onclick="addOdometro()">Registrar</button>
+        <button class="ghost" id="btn-cancelar-edicion-odometro" style="display:none;" onclick="cancelarEdicionOdometro()">Cancelar edición</button>
+      </div>
     </div>
     <div class="card"><h2>Historial de lecturas</h2><div id="lista-odometro"></div></div>
   </div>
@@ -1013,6 +1016,27 @@ function renderRutas(){
 }
 
 // ---- ODÓMETRO ----
+let editandoOdometroId = null;
+function editarOdometro(id){
+  const o = state.odometro.find(x=>x.id===id);
+  if(!o) return;
+  document.getElementById('o-fecha').value = o.fecha;
+  document.getElementById('o-vehiculo').value = o.vehiculo_id;
+  document.getElementById('o-tecnico').value = o.tecnico_id || '';
+  document.getElementById('o-km-inicio').value = o.km_inicio ?? '';
+  document.getElementById('o-km-termino').value = o.km_termino ?? '';
+  editandoOdometroId = id;
+  document.getElementById('btn-add-odometro').textContent = 'Guardar cambios';
+  document.getElementById('btn-cancelar-edicion-odometro').style.display = 'inline-block';
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+function cancelarEdicionOdometro(){
+  editandoOdometroId = null;
+  document.getElementById('o-km-inicio').value='';
+  document.getElementById('o-km-termino').value='';
+  document.getElementById('btn-add-odometro').textContent = 'Registrar';
+  document.getElementById('btn-cancelar-edicion-odometro').style.display = 'none';
+}
 async function addOdometro(){
   const fecha = document.getElementById('o-fecha').value;
   const vehiculo_id = document.getElementById('o-vehiculo').value;
@@ -1021,8 +1045,20 @@ async function addOdometro(){
   const km_terminoVal = document.getElementById('o-km-termino').value;
   const km_termino = km_terminoVal ? parseFloat(km_terminoVal) : null;
   if(!fecha || !vehiculo_id || !km_inicio){ alert('Completa fecha, vehículo y km de inicio.'); return; }
-  if(state.odometro.some(o=>o.vehiculo_id===vehiculo_id && o.fecha===fecha)){ alert('Ya hay una lectura para ese vehículo en esa fecha.'); return; }
+  const yaExiste = state.odometro.some(o=>o.vehiculo_id===vehiculo_id && o.fecha===fecha && o.id!==editandoOdometroId);
+  if(yaExiste){ alert('Ya hay una lectura para ese vehículo en esa fecha.'); return; }
   const km = km_termino ?? km_inicio; // compatibilidad con mantenciones y otros cálculos que usan "km"
+
+  if(editandoOdometroId){
+    const { data, error } = await supabaseClient.from('odometro').update({fecha, vehiculo_id, tecnico_id, km_inicio, km_termino, km}).eq('id', editandoOdometroId).select().single();
+    if(error){ alert('No se pudo guardar: '+error.message); return; }
+    const idx = state.odometro.findIndex(o=>o.id===editandoOdometroId);
+    if(idx>-1) state.odometro[idx] = data;
+    cancelarEdicionOdometro();
+    renderOdometro(); renderMantenciones();
+    return;
+  }
+
   const { data, error } = await supabaseClient.from('odometro').insert({fecha, vehiculo_id, km, km_inicio, km_termino, tecnico_id}).select().single();
   if(error){ alert('No se pudo guardar: '+error.message); return; }
   state.odometro.push(data);
@@ -1096,7 +1132,7 @@ function renderOdometro(){
       <td class="mono">${recorridoTexto}</td>
       <td>${vsRutasTexto}</td>
       <td>${huecoTexto}</td>
-      <td><span class="del" onclick="delOdometro('${o.id}')">Eliminar</span></td></tr>`;
+      <td><span class="ghost" style="cursor:pointer; margin-right:8px;" onclick="editarOdometro('${o.id}')">Editar</span><span class="del" onclick="delOdometro('${o.id}')">Eliminar</span></td></tr>`;
     }).join('')}
   </tbody></table>
   <p class="save-note">"vs Rutas del día" compara lo recorrido ese día contra el km teórico de las rutas registradas ese mismo día. "Hasta el siguiente registro" muestra el km recorrido entre el término de un día y el inicio del siguiente registrado — ahí es donde aparecería el uso de noche o de fin de semana.</p>`;
