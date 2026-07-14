@@ -182,6 +182,7 @@
       <div class="grid">
         <div><label>Nombre</label><input id="t-nombre" placeholder="Ej: Juan Pérez"></div>
         <div style="grid-column:span 2;"><label>Dirección de su casa</label><input id="t-direccion" placeholder="Ej: Calle Los Aromos 234, Concón"></div>
+        <div><label>Km hasta la oficina — respaldo manual</label><input id="t-km-manual" type="number" step="0.1" placeholder="Solo si no se encuentra la dirección"></div>
       </div>
       <div class="row-actions">
         <button class="primary" id="btn-add-tecnico" onclick="addTecnico()">Agregar técnico</button>
@@ -278,7 +279,7 @@
         <button class="ghost" onclick="guardarRutaManual()">Guardar con este km</button>
       </div>
     </div>
-    <div class="card"><h2>Historial de rutas</h2><div id="lista-rutas"></div></div>
+    <div class="card"><h2>Historial de rutas <button class="ghost" style="font-size:11.5px; padding:4px 10px;" onclick="exportarRutasExcel()">📊 Exportar</button></h2><div id="lista-rutas"></div></div>
   </div>
 
   <!-- ODÓMETRO -->
@@ -298,7 +299,7 @@
         <button class="ghost" id="btn-cancelar-edicion-odometro" style="display:none;" onclick="cancelarEdicionOdometro()">Cancelar edición</button>
       </div>
     </div>
-    <div class="card"><h2>Historial de lecturas</h2><div id="lista-odometro"></div></div>
+    <div class="card"><h2>Historial de lecturas <button class="ghost" style="font-size:11.5px; padding:4px 10px;" onclick="exportarOdometroExcel()">📊 Exportar</button></h2><div id="lista-odometro"></div></div>
   </div>
 
   <!-- MANTENCIONES -->
@@ -320,7 +321,7 @@
       </div>
       <div class="row-actions"><button class="primary" onclick="addMantencion()">Registrar mantención</button></div>
     </div>
-    <div class="card"><h2>Historial de mantenciones</h2><div id="lista-mantenciones"></div></div>
+    <div class="card"><h2>Historial de mantenciones <button class="ghost" style="font-size:11.5px; padding:4px 10px;" onclick="exportarMantencionesExcel()">📊 Exportar</button></h2><div id="lista-mantenciones"></div></div>
   </div>
 
   <!-- USO PERSONAL -->
@@ -337,7 +338,7 @@
       <div class="grid" style="margin-top:10px;"><div style="grid-column:span 2;"><label>Nota — opcional</label><input id="up-nota" placeholder="Ej: fin de semana"></div></div>
       <div class="row-actions"><button class="primary" onclick="addKmPersonal()">Registrar</button></div>
     </div>
-    <div class="card"><h2>Historial</h2><div id="lista-km-personal"></div></div>
+    <div class="card"><h2>Historial <button class="ghost" style="font-size:11.5px; padding:4px 10px;" onclick="exportarKmPersonalExcel()">📊 Exportar</button></h2><div id="lista-km-personal"></div></div>
   </div>
 
   <!-- COMBUSTIBLE -->
@@ -353,7 +354,7 @@
       </div>
       <div class="row-actions"><button class="primary" id="btn-add-combustible" onclick="addCombustible()">Registrar carga</button></div>
     </div>
-    <div class="card"><h2>Historial de cargas</h2><div id="lista-combustible"></div></div>
+    <div class="card"><h2>Historial de cargas <button class="ghost" style="font-size:11.5px; padding:4px 10px;" onclick="exportarCombustibleExcel()">📊 Exportar</button></h2><div id="lista-combustible"></div></div>
   </div>
 
   <!-- RESUMEN -->
@@ -361,7 +362,12 @@
     <div class="card">
       <h2>Resumen mensual por vehículo</h2>
       <p class="hint">Compara litros y km esperados contra lo real, por vehículo y por mes.</p>
-      <div class="summary-select"><div><label>Mes</label><input id="rs-mes" type="month"></div></div>
+      <div class="summary-select">
+        <div><label>Mes</label><input id="rs-mes" type="month"></div>
+        <div><label>Ver solo un día — opcional</label><input id="rs-dia" type="date" onchange="renderResumen()"></div>
+        <div><label>Vehículo — opcional</label><select id="rs-vehiculo" onchange="renderResumen()"><option value="">Todos los vehículos</option></select></div>
+        <div style="display:flex; align-items:flex-end;"><button class="ghost" onclick="exportarResumenExcel()">📊 Exportar mes a Excel</button></div>
+      </div>
       <div id="lista-resumen"></div>
     </div>
   </div>
@@ -559,8 +565,37 @@ async function calcularRutaKm(puntos){
   if(data.code !== 'Ok' || !data.routes || !data.routes.length) throw new Error('No se encontró una ruta entre esos puntos.');
   return data.routes[0].distance / 1000;
 }
+async function calcularRutaConTramos(puntos){
+  const coordsStr = puntos.map(p=>`${p.lon},${p.lat}`).join(';');
+  const url = `https://router.project-osrm.org/route/v1/driving/${coordsStr}?overview=false`;
+  const res = await fetch(url);
+  if(!res.ok) throw new Error('No se pudo calcular la ruta.');
+  const data = await res.json();
+  if(data.code !== 'Ok' || !data.routes || !data.routes.length) throw new Error('No se encontró una ruta entre esos puntos.');
+  const route = data.routes[0];
+  return { total: route.distance/1000, legs: route.legs.map(l=>l.distance/1000) };
+}
 
-// ---- TABS ----
+// ---- EXPORTAR A EXCEL ----
+function exportarAExcel(hojas, nombreArchivo){
+  const wb = XLSX.utils.book_new();
+  hojas.forEach(h=>{
+    const ws = XLSX.utils.json_to_sheet(h.datos);
+    XLSX.utils.book_append_sheet(wb, ws, h.nombre.slice(0,31));
+  });
+  XLSX.writeFile(wb, nombreArchivo);
+  mostrarExito('Excel descargado');
+}
+function nombreVeh(id){ const v = state.vehiculos.find(x=>x.id===id); return v?v.nombre:'—'; }
+function nombreTec(id){ const t = state.tecnicos.find(x=>x.id===id); return t?t.nombre:'—'; }
+function nombreParadasTexto(paradas){
+  return (paradas||[]).map(cid=>{
+    if(cid==='__OFICINA__') return 'Oficina';
+    if(cid==='__CASA__') return 'Casa';
+    const c = state.clientes.find(x=>x.id===cid);
+    return c ? c.nombre : '—';
+  }).join(' → ');
+}
 document.querySelectorAll('nav button[data-tab]').forEach(btn=>{
   btn.addEventListener('click', ()=>{
     document.querySelectorAll('nav button[data-tab]').forEach(b=>b.classList.remove('active'));
@@ -879,8 +914,9 @@ function renderParadasTemp(){
   if(!paradasTemp.length){ el.innerHTML = '<p class="empty">Aún no agregas paradas para esta ruta.</p>'; return; }
   el.innerHTML = paradasTemp.map((cid,idx)=>{
     const esOficina = cid === '__OFICINA__';
-    const c = esOficina ? null : state.clientes.find(x=>x.id===cid);
-    const nombre = esOficina ? '🏢 Oficina' : (c ? (c.tipo==='proveedor'?'🧰 '+c.nombre:c.nombre) : '—');
+    const esCasa = cid === '__CASA__';
+    const c = (esOficina||esCasa) ? null : state.clientes.find(x=>x.id===cid);
+    const nombre = esOficina ? '🏢 Oficina' : esCasa ? '🏠 Casa del técnico' : (c ? (c.tipo==='proveedor'?'🧰 '+c.nombre:c.nombre) : '—');
     const t = tiemposTemp[idx] || {desplazamiento:null, ejecucion:null};
     return `<div class="stop-row" style="flex-wrap:wrap;">
       <div class="n">${idx+1}</div><div class="name">${nombre}</div>
@@ -925,13 +961,13 @@ function cancelarEdicionRuta(){
   document.getElementById('editando-aviso').style.display = 'none';
   document.getElementById('r-status').textContent = '';
 }
-async function guardarRutaFinal(fecha, vehiculo_id, paradas, km, esManual, tecnico_id, tecnico_acompanante_id){
+async function guardarRutaFinal(fecha, vehiculo_id, paradas, km, esManual, tecnico_id, tecnico_acompanante_id, km_alternativo_oficina){
   if(guardando['ruta']) return;
   guardando['ruta'] = true;
   try{
     const tiempos = [...tiemposTemp];
     if(editandoRutaId){
-      const { data, error } = await supabaseClient.from('rutas').update({fecha, vehiculo_id, paradas:[...paradas], km, manual:esManual, tecnico_id: tecnico_id||null, tecnico_acompanante_id: tecnico_acompanante_id||null, tiempos}).eq('id', editandoRutaId).select().single();
+      const { data, error } = await supabaseClient.from('rutas').update({fecha, vehiculo_id, paradas:[...paradas], km, manual:esManual, tecnico_id: tecnico_id||null, tecnico_acompanante_id: tecnico_acompanante_id||null, tiempos, km_alternativo_oficina: km_alternativo_oficina??null}).eq('id', editandoRutaId).select().single();
       if(error){ alert('No se pudo guardar los cambios: '+error.message); return; }
       const idx = state.rutas.findIndex(r=>r.id===editandoRutaId);
       if(idx>-1) state.rutas[idx] = data;
@@ -940,7 +976,7 @@ async function guardarRutaFinal(fecha, vehiculo_id, paradas, km, esManual, tecni
       mostrarExito('Ruta actualizada');
       return;
     }
-    const { data, error } = await supabaseClient.from('rutas').insert({fecha, vehiculo_id, paradas: [...paradas], km, manual: esManual, tecnico_id: tecnico_id||null, tecnico_acompanante_id: tecnico_acompanante_id||null, tiempos}).select().single();
+    const { data, error } = await supabaseClient.from('rutas').insert({fecha, vehiculo_id, paradas: [...paradas], km, manual: esManual, tecnico_id: tecnico_id||null, tecnico_acompanante_id: tecnico_acompanante_id||null, tiempos, km_alternativo_oficina: km_alternativo_oficina??null}).select().single();
     if(error){ alert('No se pudo guardar la ruta: '+error.message); return; }
     state.rutas.push(data);
     paradasTemp = []; tiemposTemp = []; renderParadasTemp(); renderRutas();
@@ -958,7 +994,7 @@ function guardarRutaManual(){
   if(!fecha || !vehiculo_id){ alert('Elige fecha y vehículo.'); return; }
   if(!km){ alert('Ingresa el km total de la ruta.'); return; }
   if(!paradasTemp.length){ alert('Agrega al menos una parada (para dejar registro de a quién visitó).'); return; }
-  guardarRutaFinal(fecha, vehiculo_id, paradasTemp, km, true, tecnico_id, tecnico_acompanante_id);
+  guardarRutaFinal(fecha, vehiculo_id, paradasTemp, km, true, tecnico_id, tecnico_acompanante_id, null);
   document.getElementById('r-km-manual').value='';
 }
 async function calcularYGuardarRuta(){
@@ -974,10 +1010,13 @@ async function calcularYGuardarRuta(){
 
   const tecnico = tecnico_id ? state.tecnicos.find(t=>t.id===tecnico_id) : null;
   const kmComute = (tecnico && tecnico.km_casa_oficina) ? Number(tecnico.km_casa_oficina) : 0;
-  const terminaEnOficina = paradasTemp[paradasTemp.length-1] === '__OFICINA__';
+  const ultimaParada = paradasTemp[paradasTemp.length-1];
+  const terminaEnOficina = ultimaParada === '__OFICINA__';
+  // "Casa" es solo una etiqueta de destino, no una parada real que ubicar en el mapa — se saca del cálculo de puntos
+  const paradasParaCalculo = paradasTemp.filter(cid => cid !== '__CASA__');
 
   btn.disabled = true;
-  const clientesRuta = paradasTemp.map(cid => {
+  const clientesRuta = paradasParaCalculo.map(cid => {
     if(cid === '__OFICINA__') return { id:'__OFICINA__', nombre:'Oficina', lat: state.oficina.lat, lon: state.oficina.lon, modo:'auto' };
     return state.clientes.find(c=>c.id===cid);
   });
@@ -1010,24 +1049,51 @@ async function calcularYGuardarRuta(){
       }
     }
     if(faltan.some(c=>c)) renderClientes();
-    statusEl.textContent = 'Una o más direcciones no se pudieron ubicar — se usó un km estimado para esos tramos.';
+    statusEl.textContent = 'Una o más direcciones no se pudieron ubicar — se usó un km estimado para esos tramos (sin desglose por cliente).';
     statusEl.className = 'status-line err';
     const kmAutoParte = clientesRuta.filter(c=>c && c.lat!=null);
+    let kmFinalCasaExtra = 0;
+    if(!terminaEnOficina && tecnico && tecnico.casa_lat==null && tecnico.km_casa_oficina) kmFinalCasaExtra = Number(tecnico.km_casa_oficina);
     if(kmAutoParte.length){
       try{
         const puntos = construirPuntosRuta(kmAutoParte, tecnico, terminaEnOficina);
         const kmAuto = await calcularRutaKm(puntos);
-        await guardarRutaFinal(fecha, vehiculo_id, paradasTemp, kmAuto + kmRespaldo + kmComute, true, tecnico_id, tecnico_acompanante_id);
-      }catch(e){ await guardarRutaFinal(fecha, vehiculo_id, paradasTemp, kmRespaldo + kmComute, true, tecnico_id, tecnico_acompanante_id); }
-    } else { await guardarRutaFinal(fecha, vehiculo_id, paradasTemp, kmRespaldo + kmComute, true, tecnico_id, tecnico_acompanante_id); }
+        await guardarRutaFinal(fecha, vehiculo_id, paradasTemp, kmAuto + kmRespaldo + kmComute + kmFinalCasaExtra, true, tecnico_id, tecnico_acompanante_id, null);
+      }catch(e){ await guardarRutaFinal(fecha, vehiculo_id, paradasTemp, kmRespaldo + kmComute + kmFinalCasaExtra, true, tecnico_id, tecnico_acompanante_id, null); }
+    } else { await guardarRutaFinal(fecha, vehiculo_id, paradasTemp, kmRespaldo + kmComute + kmFinalCasaExtra, true, tecnico_id, tecnico_acompanante_id, null); }
   } else {
     statusEl.textContent = 'Calculando ruta real...'; statusEl.className='status-line';
     try{
+      const casaSinCoords = !terminaEnOficina && (!tecnico || tecnico.casa_lat==null);
       const puntos = construirPuntosRuta(clientesRuta, tecnico, terminaEnOficina);
-      const km = await calcularRutaKm(puntos);
-      const kmTotal = km + kmComute;
-      statusEl.textContent = `Ruta calculada: ${kmTotal.toFixed(1)} km${kmComute?` (incluye ${kmComute.toFixed(1)} km fijo casa↔oficina)`:''} ✓`; statusEl.className='status-line ok';
-      await guardarRutaFinal(fecha, vehiculo_id, paradasTemp, kmTotal, false, tecnico_id, tecnico_acompanante_id);
+      const { total, legs } = await calcularRutaConTramos(puntos);
+      const kmFinalCasaExtra = (casaSinCoords && tecnico && tecnico.km_casa_oficina) ? Number(tecnico.km_casa_oficina) : 0;
+      const kmTotal = total + kmComute + kmFinalCasaExtra;
+
+      // Guardar el km de cada tramo (para poder calcular costo por cliente/proveedor después)
+      for(let i=0;i<paradasParaCalculo.length;i++){
+        const idxOriginal = paradasTemp.indexOf(paradasParaCalculo[i]);
+        if(!tiemposTemp[idxOriginal]) tiemposTemp[idxOriginal] = {desplazamiento:null, ejecucion:null};
+        tiemposTemp[idxOriginal].km = legs[i] ?? null;
+      }
+
+      // Comparación: si terminó en casa, cuánto habría sido volver a la oficina en su lugar
+      let kmAlternativoOficina = null;
+      if(!terminaEnOficina && !casaSinCoords){
+        try{
+          const puntosAlt = construirPuntosRuta(clientesRuta, tecnico, true);
+          const totalAlt = await calcularRutaKm(puntosAlt);
+          kmAlternativoOficina = totalAlt + kmComute;
+        }catch(e){ /* si falla la comparación, no bloquea el guardado */ }
+      }
+
+      let msg = `Ruta calculada: ${kmTotal.toFixed(1)} km${kmComute?` (incluye ${kmComute.toFixed(1)} km fijo casa↔oficina)`:''}`;
+      if(kmAlternativoOficina!=null){
+        const diff = kmTotal - kmAlternativoOficina;
+        msg += ` · Si hubiese vuelto a oficina: ${kmAlternativoOficina.toFixed(1)} km (${diff>=0?'+':''}${diff.toFixed(1)} km yendo a casa)`;
+      }
+      statusEl.textContent = msg + ' ✓'; statusEl.className='status-line ok';
+      await guardarRutaFinal(fecha, vehiculo_id, paradasTemp, kmTotal, false, tecnico_id, tecnico_acompanante_id, kmAlternativoOficina);
     }catch(e){
       statusEl.textContent = 'No se pudo calcular la ruta automática. Puedes usar "Guardar con este km" mientras tanto.';
       statusEl.className = 'status-line err';
@@ -1042,7 +1108,7 @@ function construirPuntosRuta(clientesRuta, tecnico, terminaEnOficina){
     if(tecnico && tecnico.casa_lat != null){
       puntos.push({lat: tecnico.casa_lat, lon: tecnico.casa_lon});
     } else {
-      puntos.push({lat: state.oficina.lat, lon: state.oficina.lon}); // respaldo: sin técnico/casa registrada, vuelve a oficina
+      puntos.push({lat: state.oficina.lat, lon: state.oficina.lon}); // respaldo: sin coordenadas de casa, vuelve a oficina (se suma el km manual aparte)
     }
   }
   return puntos;
@@ -1056,7 +1122,7 @@ function renderRutas(){
   const el = document.getElementById('lista-rutas');
   if(!state.rutas.length){ el.innerHTML='<p class="empty">Aún no registras rutas.</p>'; return; }
   const rows = [...state.rutas].sort((a,b)=>b.fecha.localeCompare(a.fecha));
-  el.innerHTML = `<table><thead><tr><th>Fecha</th><th>Vehículo</th><th>Técnico</th><th>Paradas</th><th>Km</th><th>Tiempo</th><th></th></tr></thead><tbody>
+  el.innerHTML = `<table><thead><tr><th>Fecha</th><th>Vehículo</th><th>Técnico</th><th>Paradas</th><th>Km</th><th>vs. oficina</th><th>Tiempo</th><th></th></tr></thead><tbody>
     ${rows.map(r=>{
       const veh = state.vehiculos.find(x=>x.id===r.vehiculo_id);
       const tec = state.tecnicos.find(x=>x.id===r.tecnico_id);
@@ -1064,13 +1130,18 @@ function renderRutas(){
       const tecTexto = tec ? (tecAcomp ? `${tec.nombre} (+ ${tecAcomp.nombre})` : tec.nombre) : '—';
       const nombres = (r.paradas||[]).map(cid=>{
         if(cid==='__OFICINA__') return '🏢 Oficina';
+        if(cid==='__CASA__') return '🏠 Casa';
         const c=state.clientes.find(x=>x.id===cid); return c?c.nombre:'—';
       }).join(' → ');
       const tiempos = r.tiempos || [];
       const totalDespl = tiempos.reduce((s,t)=>s+(t&&t.desplazamiento?Number(t.desplazamiento):0),0);
       const totalEjec = tiempos.reduce((s,t)=>s+(t&&t.ejecucion?Number(t.ejecucion):0),0);
       const tiempoTexto = (totalDespl||totalEjec) ? `${totalDespl}min despl. / ${totalEjec}min ejec.` : '—';
-      return `<tr><td class="mono">${r.fecha}</td><td>${veh?veh.nombre:'—'}</td><td>${tecTexto}</td><td>${nombres}${r.manual?' <span class="badge warn">estimado</span>':''}</td><td class="mono">${Number(r.km).toFixed(1)} km</td><td class="mono" style="font-size:12px;">${tiempoTexto}</td>
+      const compTexto = (r.km_alternativo_oficina!=null) ? (() => {
+        const diff = Number(r.km) - Number(r.km_alternativo_oficina);
+        return `<span style="font-size:12px;">${Number(r.km_alternativo_oficina).toFixed(1)} km<br>(${diff>=0?'+':''}${diff.toFixed(1)} yendo a casa)</span>`;
+      })() : '—';
+      return `<tr><td class="mono">${r.fecha}</td><td>${veh?veh.nombre:'—'}</td><td>${tecTexto}</td><td>${nombres}${r.manual?' <span class="badge warn">estimado</span>':''}</td><td class="mono">${Number(r.km).toFixed(1)} km</td><td>${compTexto}</td><td class="mono" style="font-size:12px;">${tiempoTexto}</td>
       <td><span class="ghost" style="cursor:pointer; margin-right:8px;" onclick="editarRuta('${r.id}')">Editar</span><span class="del" onclick="delRuta('${r.id}')">Eliminar</span></td></tr>`;
     }).join('')}
   </tbody></table>`;
@@ -1409,6 +1480,7 @@ function editarTecnico(id){
   if(!t) return;
   document.getElementById('t-nombre').value = t.nombre;
   document.getElementById('t-direccion').value = t.casa_direccion || '';
+  document.getElementById('t-km-manual').value = (!t.casa_lat && t.km_casa_oficina) ? t.km_casa_oficina : '';
   editandoTecnicoId = id;
   document.getElementById('btn-add-tecnico').textContent = 'Guardar cambios';
   document.getElementById('btn-cancelar-edicion-tecnico').style.display = 'inline-block';
@@ -1418,6 +1490,7 @@ function cancelarEdicionTecnico(){
   editandoTecnicoId = null;
   document.getElementById('t-nombre').value = '';
   document.getElementById('t-direccion').value = '';
+  document.getElementById('t-km-manual').value = '';
   document.getElementById('btn-add-tecnico').textContent = 'Agregar técnico';
   document.getElementById('btn-cancelar-edicion-tecnico').style.display = 'none';
   document.getElementById('t-status').textContent = '';
@@ -1425,6 +1498,7 @@ function cancelarEdicionTecnico(){
 async function addTecnico(){
   const nombre = document.getElementById('t-nombre').value.trim();
   const direccion = document.getElementById('t-direccion').value.trim();
+  const kmManual = parseFloat(document.getElementById('t-km-manual').value) || null;
   const statusEl = document.getElementById('t-status');
   if(!nombre){ alert('Ingresa el nombre.'); return; }
 
@@ -1445,12 +1519,25 @@ async function addTecnico(){
       const km = await calcularRutaKm([{lat:state.oficina.lat, lon:state.oficina.lon}, {lat:geo.lat, lon:geo.lon}]);
       casa_lat = geo.lat; casa_lon = geo.lon; km_casa_oficina = km;
     }catch(e){
-      casa_lat = null; casa_lon = null; km_casa_oficina = null;
-      statusEl.textContent = 'No se pudo ubicar la dirección — se guardó igual, puedes reintentar editando de nuevo.';
-      statusEl.className='status-line err';
+      casa_lat = null; casa_lon = null;
+      if(kmManual){
+        km_casa_oficina = kmManual;
+        statusEl.textContent = 'No se encontró la dirección en el mapa — se usó el km manual que ingresaste.';
+        statusEl.className = 'status-line err';
+      } else {
+        km_casa_oficina = null;
+        statusEl.textContent = 'No se pudo ubicar la dirección. Ingresa un km manual de respaldo y guarda de nuevo.';
+        statusEl.className='status-line err';
+      }
     }
+  } else if(!direccion && kmManual){
+    // sin dirección, pero con km manual directo
+    casa_lat = null; casa_lon = null; km_casa_oficina = kmManual;
   } else if(!direccion){
     casa_lat = null; casa_lon = null; km_casa_oficina = null;
+  } else if(kmManual && !casa_lat){
+    // dirección sin cambios pero seguía sin ubicarse y ahora agregó km manual
+    km_casa_oficina = kmManual;
   }
 
   if(editando){
@@ -1460,15 +1547,17 @@ async function addTecnico(){
     cancelarEdicionTecnico();
     if(!statusEl.textContent){ statusEl.textContent = 'Cambios guardados ✓'; statusEl.className='status-line ok'; }
     renderTecnicos(); fillSelects();
+    mostrarExito('Técnico actualizado');
     return;
   }
 
   const { data, error } = await supabaseClient.from('tecnicos').insert({nombre, casa_direccion:direccion||null, casa_lat, casa_lon, km_casa_oficina}).select().single();
   if(error){ alert('No se pudo guardar: '+error.message); return; }
   state.tecnicos.push(data);
-  document.getElementById('t-nombre').value=''; document.getElementById('t-direccion').value='';
+  document.getElementById('t-nombre').value=''; document.getElementById('t-direccion').value=''; document.getElementById('t-km-manual').value='';
   if(!statusEl.textContent){ statusEl.textContent = 'Técnico guardado ✓'; statusEl.className='status-line ok'; }
   renderTecnicos(); fillSelects();
+  mostrarExito('Técnico agregado');
 }
 async function delTecnico(id){
   if(!confirm('¿Eliminar este técnico?')) return;
@@ -1582,13 +1671,174 @@ async function guardarJustificacionPersonal(vehiculo_id){
   renderKmPersonal();
   renderResumen();
 }
+function costoPorParadaMes(mes){
+  const resultado = {};
+  state.rutas.filter(r=>r.fecha.startsWith(mes)).forEach(r=>{
+    const costoPorKm = costoPorKmVehiculoMes(r.vehiculo_id, mes);
+    if(!costoPorKm) return;
+    (r.tiempos||[]).forEach((t,i)=>{
+      if(!t || t.km==null) return;
+      const cid = (r.paradas||[])[i];
+      if(!cid || cid==='__OFICINA__' || cid==='__CASA__') return;
+      const c = state.clientes.find(x=>x.id===cid);
+      if(!c) return;
+      if(!resultado[cid]) resultado[cid] = { nombre:c.nombre, tipo:c.tipo, km:0, costo:0, visitas:0 };
+      resultado[cid].km += t.km;
+      resultado[cid].costo += t.km*costoPorKm;
+      resultado[cid].visitas += 1;
+    });
+  });
+  return Object.values(resultado).sort((a,b)=>b.costo-a.costo);
+}
+function exportarRutasExcel(){
+  if(!state.rutas.length){ alert('No hay rutas para exportar.'); return; }
+  const datos = [...state.rutas].sort((a,b)=>a.fecha.localeCompare(b.fecha)).map(r=>({
+    'Fecha': r.fecha, 'Vehículo': nombreVeh(r.vehiculo_id), 'Técnico': nombreTec(r.tecnico_id),
+    'Acompañante': nombreTec(r.tecnico_acompanante_id), 'Paradas': nombreParadasTexto(r.paradas),
+    'Km': Number(r.km).toFixed(1), 'Estimado (manual)': r.manual?'Sí':'No',
+    'Km si volvía a oficina': r.km_alternativo_oficina!=null ? Number(r.km_alternativo_oficina).toFixed(1) : ''
+  }));
+  exportarAExcel([{nombre:'Rutas', datos}], 'Gestion_KM_Rutas.xlsx');
+}
+function exportarOdometroExcel(){
+  if(!state.odometro.length){ alert('No hay lecturas para exportar.'); return; }
+  const datos = [...state.odometro].sort((a,b)=>a.fecha.localeCompare(b.fecha)).map(o=>({
+    'Fecha': o.fecha, 'Vehículo': nombreVeh(o.vehiculo_id), 'Técnico': nombreTec(o.tecnico_id),
+    'Km inicio': o.km_inicio??'', 'Km término': o.km_termino??'',
+    'Recorrido del día': (o.km_inicio!=null && o.km_termino!=null) ? Number((o.km_termino-o.km_inicio).toFixed(1)) : ''
+  }));
+  exportarAExcel([{nombre:'Odometro', datos}], 'Gestion_KM_Odometro.xlsx');
+}
+function exportarMantencionesExcel(){
+  if(!state.mantenciones.length){ alert('No hay mantenciones para exportar.'); return; }
+  const datos = [...state.mantenciones].sort((a,b)=>a.fecha.localeCompare(b.fecha)).map(m=>({
+    'Fecha': m.fecha, 'Vehículo': nombreVeh(m.vehiculo_id), 'Tipo': m.tipo, 'Km': m.km,
+    'Repetir cada (km)': m.frecuencia_km||'', 'Repetir cada (meses)': m.frecuencia_meses||''
+  }));
+  exportarAExcel([{nombre:'Mantenciones', datos}], 'Gestion_KM_Mantenciones.xlsx');
+}
+function exportarKmPersonalExcel(){
+  if(!state.kmPersonal.length){ alert('No hay registros para exportar.'); return; }
+  const datos = [...state.kmPersonal].sort((a,b)=>a.fecha.localeCompare(b.fecha)).map(k=>({
+    'Fecha': k.fecha, 'Vehículo': nombreVeh(k.vehiculo_id), 'Técnico': nombreTec(k.tecnico_id), 'Km': k.km, 'Nota': k.nota||''
+  }));
+  exportarAExcel([{nombre:'Km Personal', datos}], 'Gestion_KM_UsoPersonal.xlsx');
+}
+function exportarCombustibleExcel(){
+  if(!state.combustible.length){ alert('No hay cargas para exportar.'); return; }
+  const datos = [...state.combustible].sort((a,b)=>a.fecha.localeCompare(b.fecha)).map(f=>({
+    'Fecha': f.fecha, 'Vehículo': nombreVeh(f.vehiculo_id), 'Técnico': nombreTec(f.tecnico_id),
+    'Litros': f.litros, 'Costo ($)': f.costo||''
+  }));
+  exportarAExcel([{nombre:'Combustible', datos}], 'Gestion_KM_Combustible.xlsx');
+}
+
+function exportarResumenExcel(){
+  const mes = document.getElementById('rs-mes').value;
+  if(!mes){ alert('Elige un mes primero.'); return; }
+  if(!state.vehiculos.length){ alert('No hay vehículos.'); return; }
+
+  const hojaResumen = state.vehiculos.map(v=>{
+    const rutasMes = state.rutas.filter(x=>x.vehiculo_id===v.id && x.fecha.startsWith(mes));
+    const kmTeorico = rutasMes.reduce((s,x)=>s+Number(x.km),0) + ajustesRutaMes(v.id, mes);
+    const kmReal = kmRealMes(v.id, mes);
+    const kmPersonalDeclarado = kmPersonalMes(v.id, mes);
+    const litrosMes = state.combustible.filter(x=>x.vehiculo_id===v.id && x.fecha.startsWith(mes)).reduce((s,x)=>s+Number(x.litros),0);
+    const costoMes = state.combustible.filter(x=>x.vehiculo_id===v.id && x.fecha.startsWith(mes)).reduce((s,x)=>s+(Number(x.costo)||0),0);
+    const litrosTrabajo = v.rendimiento ? (kmTeorico/v.rendimiento) : 0;
+    const diferenciaKm = kmReal - kmTeorico - kmPersonalDeclarado;
+    return {
+      'Vehículo': v.nombre, 'Patente': v.patente||'',
+      'Km teórico (rutas)': Number(kmTeorico.toFixed(1)),
+      'Km personal declarado': Number(kmPersonalDeclarado.toFixed(1)),
+      'Km real (odómetro)': Number(kmReal.toFixed(1)),
+      'Km sin explicar': Number(diferenciaKm.toFixed(1)),
+      'Litros que necesitaba el trabajo': Number(litrosTrabajo.toFixed(1)),
+      'Litros cargados (empresa)': Number(litrosMes.toFixed(1)),
+      'Costo combustible cargado ($)': Math.round(costoMes),
+    };
+  });
+
+  const hojaCostoParada = costoPorParadaMes(mes).map(f=>({
+    'Cliente / Proveedor': f.nombre, 'Tipo': f.tipo==='proveedor'?'Proveedor':'Cliente',
+    'Visitas': f.visitas, 'Km total': Number(f.km.toFixed(1)), 'Costo combustible ($)': Math.round(f.costo)
+  }));
+
+  const hojaRutas = state.rutas.filter(r=>r.fecha.startsWith(mes)).sort((a,b)=>a.fecha.localeCompare(b.fecha)).map(r=>({
+    'Fecha': r.fecha, 'Vehículo': nombreVeh(r.vehiculo_id), 'Técnico': nombreTec(r.tecnico_id),
+    'Acompañante': nombreTec(r.tecnico_acompanante_id), 'Paradas': nombreParadasTexto(r.paradas),
+    'Km': Number(r.km).toFixed(1), 'Estimado (manual)': r.manual ? 'Sí' : 'No',
+    'Km si volvía a oficina': r.km_alternativo_oficina!=null ? Number(r.km_alternativo_oficina).toFixed(1) : ''
+  }));
+
+  const hojaOdometro = state.odometro.filter(o=>o.fecha.startsWith(mes)).sort((a,b)=>a.fecha.localeCompare(b.fecha)).map(o=>({
+    'Fecha': o.fecha, 'Vehículo': nombreVeh(o.vehiculo_id), 'Técnico': nombreTec(o.tecnico_id),
+    'Km inicio': o.km_inicio??'', 'Km término': o.km_termino??'',
+    'Recorrido del día': (o.km_inicio!=null && o.km_termino!=null) ? Number((o.km_termino-o.km_inicio).toFixed(1)) : ''
+  }));
+
+  const hojaCombustible = state.combustible.filter(f=>f.fecha.startsWith(mes)).sort((a,b)=>a.fecha.localeCompare(b.fecha)).map(f=>({
+    'Fecha': f.fecha, 'Vehículo': nombreVeh(f.vehiculo_id), 'Técnico': nombreTec(f.tecnico_id),
+    'Litros': f.litros, 'Costo ($)': f.costo||''
+  }));
+
+  const hojaKmPersonal = state.kmPersonal.filter(k=>k.fecha.startsWith(mes)).sort((a,b)=>a.fecha.localeCompare(b.fecha)).map(k=>({
+    'Fecha': k.fecha, 'Vehículo': nombreVeh(k.vehiculo_id), 'Técnico': nombreTec(k.tecnico_id), 'Km': k.km, 'Nota': k.nota||''
+  }));
+
+  const hojaDiario = detalleDiarioMes(mes, null).map(d=>({
+    'Día': d.fecha, 'Km trabajo': Number(d.kmTrabajo.toFixed(1)), 'Km personal': Number(d.kmPersonal.toFixed(1)),
+    'Costo trabajo ($)': Math.round(d.costoTrabajo), 'Costo personal ($)': Math.round(d.costoPersonal),
+    'Acum. km trabajo': Number(d.accTrabajo.toFixed(1)), 'Acum. km personal': Number(d.accPersonal.toFixed(1)),
+    'Acum. costo trabajo ($)': Math.round(d.accCostoTrabajo), 'Acum. costo personal ($)': Math.round(d.accCostoPersonal)
+  }));
+
+  exportarAExcel([
+    {nombre:'Resumen por vehículo', datos: hojaResumen},
+    {nombre:'Detalle diario', datos: hojaDiario},
+    {nombre:'Costo por cliente-prov', datos: hojaCostoParada},
+    {nombre:'Rutas', datos: hojaRutas},
+    {nombre:'Odómetro', datos: hojaOdometro},
+    {nombre:'Combustible', datos: hojaCombustible},
+    {nombre:'Km personal', datos: hojaKmPersonal},
+  ], `Gestion_KM_${mes}.xlsx`);
+}
+function detalleDiarioMes(mes, vehiculoFiltro){
+  const vehiculos = vehiculoFiltro ? state.vehiculos.filter(v=>v.id===vehiculoFiltro) : state.vehiculos;
+  const fechas = new Set();
+  const enRango = f => f && f.startsWith(mes);
+  state.rutas.forEach(r=>{ if(enRango(r.fecha) && (!vehiculoFiltro||r.vehiculo_id===vehiculoFiltro)) fechas.add(r.fecha); });
+  state.ajustesRuta.forEach(a=>{ if(enRango(a.fecha) && (!vehiculoFiltro||a.vehiculo_id===vehiculoFiltro)) fechas.add(a.fecha); });
+  state.kmPersonal.forEach(k=>{ if(enRango(k.fecha) && (!vehiculoFiltro||k.vehiculo_id===vehiculoFiltro)) fechas.add(k.fecha); });
+  state.odometro.forEach(o=>{ if(enRango(o.fecha) && (!vehiculoFiltro||o.vehiculo_id===vehiculoFiltro)) fechas.add(o.fecha); });
+
+  const fechasOrdenadas = [...fechas].sort();
+  let accTrabajo=0, accPersonal=0, accCostoTrabajo=0, accCostoPersonal=0;
+  return fechasOrdenadas.map(fecha=>{
+    let kmTrabajo=0, kmPersonal=0, costoTrabajo=0, costoPersonal=0, kmReal=0;
+    vehiculos.forEach(v=>{
+      const kmT = kmRutasDelDia(v.id, fecha); // ya incluye ajustes de ruta
+      const kmP = state.kmPersonal.filter(k=>k.vehiculo_id===v.id && k.fecha===fecha).reduce((s,k)=>s+Number(k.km),0);
+      kmTrabajo += kmT; kmPersonal += kmP;
+      const odo = state.odometro.find(o=>o.vehiculo_id===v.id && o.fecha===fecha);
+      if(odo && odo.km_inicio!=null && odo.km_termino!=null) kmReal += (odo.km_termino - odo.km_inicio);
+      const cpk = costoPorKmVehiculoMes(v.id, mes);
+      if(cpk){ costoTrabajo += kmT*cpk; costoPersonal += kmP*cpk; }
+    });
+    accTrabajo += kmTrabajo; accPersonal += kmPersonal;
+    accCostoTrabajo += costoTrabajo; accCostoPersonal += costoPersonal;
+    return { fecha, kmTrabajo, kmPersonal, kmReal, costoTrabajo, costoPersonal, accTrabajo, accPersonal, accCostoTrabajo, accCostoPersonal };
+  });
+}
 function renderResumen(){
   const mes = document.getElementById('rs-mes').value;
+  const vehiculoFiltro = document.getElementById('rs-vehiculo').value;
   const el = document.getElementById('lista-resumen');
   if(!state.vehiculos.length){ el.innerHTML='<p class="empty">Agrega vehículos primero.</p>'; return; }
   if(!mes){ el.innerHTML='<p class="empty">Elige un mes para ver el resumen.</p>'; return; }
 
-  const filas = state.vehiculos.map(v=>{
+  const vehiculosAMostrar = vehiculoFiltro ? state.vehiculos.filter(v=>v.id===vehiculoFiltro) : state.vehiculos;
+  const filas = vehiculosAMostrar.map(v=>{
     const rutasMes = state.rutas.filter(x=>x.vehiculo_id===v.id && x.fecha.startsWith(mes));
     const kmTeorico = rutasMes.reduce((s,x)=>s+Number(x.km),0) + ajustesRutaMes(v.id, mes);
     const idasProveedor = rutasMes.reduce((s,r)=>{
@@ -1701,7 +1951,43 @@ function renderResumen(){
     </tr>`).join('')}
   </tbody></table>
   <p class="save-note">"Km personal declarado" ya se suma como justificado — no genera alerta. "Dif. km sin explicar" es lo que queda después de descontar rutas de trabajo Y km personal declarado — esa es la señal real de algo no reconocido.<br>
-  "Litros trabajo" es lo que las rutas registradas necesitaban. Si "Litros cargados" es mayor, esa diferencia es sospechosa de cubrir uso personal — por eso se compara con el km sin explicar para armar el número clave de arriba.</p>`;
+  "Litros trabajo" es lo que las rutas registradas necesitaban. Si "Litros cargados" es mayor, esa diferencia es sospechosa de cubrir uso personal — por eso se compara con el km sin explicar para armar el número clave de arriba.</p>
+
+  <h2 style="font-size:14.5px; margin:18px 0 10px;">📅 Detalle diario y acumulado del mes</h2>
+  ${(() => {
+    const diaFiltro = document.getElementById('rs-dia').value;
+    let dias = detalleDiarioMes(mes, vehiculoFiltro || null);
+    if(!dias.length) return '<p class="empty">Aún no hay datos registrados este mes.</p>';
+    if(diaFiltro) dias = dias.filter(d=>d.fecha===diaFiltro);
+    if(diaFiltro && !dias.length) return `<p class="empty">No hay datos registrados para el ${diaFiltro}.</p>`;
+    return `<table><thead><tr>
+      <th>Día</th><th>Km trabajo</th><th>Km personal</th><th>Costo trabajo</th><th>Costo personal</th>
+      <th>Acum. km trabajo</th><th>Acum. km personal</th><th>Acum. costo trabajo</th><th>Acum. costo personal</th>
+    </tr></thead><tbody>
+      ${dias.map(d=>`<tr>
+        <td class="mono">${d.fecha}</td>
+        <td class="mono">${d.kmTrabajo.toFixed(1)}</td>
+        <td class="mono">${d.kmPersonal.toFixed(1)}</td>
+        <td class="mono">$${Math.round(d.costoTrabajo).toLocaleString('es-CL')}</td>
+        <td class="mono">$${Math.round(d.costoPersonal).toLocaleString('es-CL')}</td>
+        <td class="mono" style="color:var(--ink-soft);">${d.accTrabajo.toFixed(1)}</td>
+        <td class="mono" style="color:var(--ink-soft);">${d.accPersonal.toFixed(1)}</td>
+        <td class="mono" style="color:var(--ink-soft);">$${Math.round(d.accCostoTrabajo).toLocaleString('es-CL')}</td>
+        <td class="mono" style="color:var(--ink-soft);">$${Math.round(d.accCostoPersonal).toLocaleString('es-CL')}</td>
+      </tr>`).join('')}
+    </tbody></table>
+    <p class="save-note">Las columnas "Acum." muestran el total acumulado desde el inicio del mes hasta ese día — la última fila es el total del mes. ${vehiculoFiltro?'':'Suma todos los vehículos; usa el filtro de vehículo de arriba para ver uno solo.'}</p>`;
+  })()}
+
+  <h2 style="font-size:14.5px; margin:18px 0 10px;">⛽ Costo de combustible por cliente / proveedor</h2>
+  ${(() => {
+    const filasCosto = costoPorParadaMes(mes);
+    if(!filasCosto.length) return '<p class="empty">Aún no hay rutas calculadas automáticamente este mes con desglose por parada (solo aplica a rutas calculadas con el botón automático, no a las guardadas con km manual).</p>';
+    return `<table><thead><tr><th>Cliente / Proveedor</th><th>Tipo</th><th>Visitas</th><th>Km total</th><th>Costo combustible</th></tr></thead><tbody>
+      ${filasCosto.map(f=>`<tr><td>${f.nombre}</td><td>${f.tipo==='proveedor'?'🧰 Proveedor':'Cliente'}</td><td class="mono">${f.visitas}</td><td class="mono">${f.km.toFixed(1)} km</td><td class="mono">$${Math.round(f.costo).toLocaleString('es-CL')}</td></tr>`).join('')}
+    </tbody></table>
+    <p class="save-note">Calculado con el tramo real hasta cada parada (según la ruta calculada) y el precio promedio del combustible de ese vehículo ese mes.</p>`;
+  })()}`;
 }
 
 // ---- SELECTS ----
@@ -1712,6 +1998,7 @@ function fillSelects(){
   document.getElementById('f-vehiculo').innerHTML = opciones || '<option value="">Sin vehículos</option>';
   document.getElementById('o-vehiculo').innerHTML = opciones || '<option value="">Sin vehículos</option>';
   document.getElementById('m-vehiculo').innerHTML = opciones || '<option value="">Sin vehículos</option>';
+  document.getElementById('rs-vehiculo').innerHTML = '<option value="">Todos los vehículos</option>' + opciones;
   document.getElementById('up-vehiculo').innerHTML = opciones || '<option value="">Sin vehículos</option>';
   const opcionesTec = '<option value="">Sin especificar</option>' + state.tecnicos.map(t=>`<option value="${t.id}">${t.nombre}</option>`).join('');
   document.getElementById('r-tecnico').innerHTML = opcionesTec;
@@ -1722,6 +2009,7 @@ function fillSelects(){
   clienteLabelToId = {};
   const usados = new Set();
   if(state.oficina){ clienteLabelToId['🏢 Oficina (vuelta a la base)'] = '__OFICINA__'; }
+  clienteLabelToId['🏠 Casa del técnico (fin de ruta)'] = '__CASA__';
   state.clientes.forEach(c=>{
     let label = c.tipo==='proveedor' ? `🧰 ${c.nombre}` : c.nombre;
     if(usados.has(label)) label = `${label} (${c.direccion.slice(0,25)})`;
