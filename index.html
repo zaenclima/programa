@@ -145,7 +145,7 @@
   <button data-tab="mantenciones">Mantenciones</button>
   <button data-tab="usopersonal">Uso Personal</button>
   <button data-tab="combustible">Combustible</button>
-  <button data-tab="resumen">Resumen</button>
+  <button data-tab="resumen">Informes</button>
 </nav>
 
 <main>
@@ -357,20 +357,33 @@
     <div class="card"><h2>Historial de cargas <button class="ghost" style="font-size:11.5px; padding:4px 10px;" onclick="exportarCombustibleExcel()">📊 Exportar</button></h2><div id="lista-combustible"></div></div>
   </div>
 
-  <!-- RESUMEN -->
+  <!-- INFORMES -->
   <div class="tab" id="tab-resumen">
     <div class="card">
-      <h2>Resumen mensual por vehículo</h2>
-      <p class="hint">Compara litros y km esperados contra lo real, por vehículo y por mes.</p>
-      <div class="summary-select">
-        <div><label>Mes</label><input id="rs-mes" type="month"></div>
-        <div><label>Ver solo un día — opcional</label><input id="rs-dia" type="date" onchange="renderResumen()"></div>
-        <div><label>Vehículo — opcional</label><select id="rs-vehiculo" onchange="renderResumen()"><option value="">Todos los vehículos</option></select></div>
-        <div style="display:flex; align-items:flex-end;"><button class="ghost" onclick="exportarResumenExcel()">📊 Exportar mes a Excel</button></div>
+      <h2>Informes</h2>
+      <p class="hint">Elige qué informe quieres ver — se despliega abajo solo cuando lo seleccionas.</p>
+      <div class="grid">
+        <div style="grid-column:span 2;"><label>Informe</label>
+          <select id="informe-tipo" onchange="renderInformes()">
+            <option value="">— Elige un informe —</option>
+            <option value="resumen_vehiculo">Resumen por vehículo (uso personal pagado por la empresa)</option>
+            <option value="rendimiento">Rendimiento real y costo por km</option>
+            <option value="costo_cliente">Costo por cliente / proveedor</option>
+            <option value="detalle_diario">Detalle diario (trabajo y personal, con acumulado)</option>
+            <option value="personal_diario">Costo diario de uso personal</option>
+          </select>
+        </div>
       </div>
-      <div id="lista-resumen"></div>
+      <div class="summary-select">
+        <div><label>Mes</label><input id="rs-mes" type="month" onchange="renderInformes()"></div>
+        <div><label>Ver solo un día — opcional</label><input id="rs-dia" type="date" onchange="renderInformes()"></div>
+        <div><label>Vehículo — opcional</label><select id="rs-vehiculo" onchange="renderInformes()"><option value="">Todos los vehículos</option></select></div>
+        <div style="display:flex; align-items:flex-end;"><button class="ghost" onclick="exportarResumenExcel()">📊 Exportar TODO el mes (todos los informes)</button></div>
+      </div>
     </div>
+    <div id="informe-contenido"></div>
   </div>
+
 
 </main>
 </div><!-- /app-shell -->
@@ -602,7 +615,7 @@ document.querySelectorAll('nav button[data-tab]').forEach(btn=>{
     document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById('tab-'+btn.dataset.tab).classList.add('active');
-    if(btn.dataset.tab==='resumen') renderResumen();
+    if(btn.dataset.tab==='resumen') renderInformes();
   });
 });
 document.querySelectorAll('button[data-subtab]').forEach(btn=>{
@@ -1035,19 +1048,23 @@ async function calcularYGuardarRuta(){
 
   const faltan = clientesRuta.filter(c=>!c || c.lat==null);
   if(faltan.length){
-    let kmRespaldo = 0;
+    let kmsManuales = [];
     for(const c of faltan){
-      if(c && c.km_manual){ kmRespaldo += c.km_manual*2; continue; }
-      const val = prompt(`No se pudo ubicar "${c ? c.nombre : 'un cliente'}" en el mapa. Ingresa los km de ida (un sentido) para este tramo, o deja vacío para omitirlo:`);
+      if(c && c.km_manual){ kmsManuales.push(c.km_manual); continue; }
+      const val = prompt(`No se pudo ubicar "${c ? c.nombre : 'un cliente'}" en el mapa. Ingresa los km de ida (un sentido, desde la oficina) para este tramo, o deja vacío para omitirlo:`);
       const num = parseFloat(val);
       if(!isNaN(num)){
-        kmRespaldo += num*2;
+        kmsManuales.push(num);
         if(c){
           c.km_manual = num; c.modo = 'manual';
           await supabaseClient.from('clientes').update({km_manual:num, modo:'manual'}).eq('id', c.id);
         }
       }
     }
+    // Si hay varias direcciones sin ubicar, no se suman como viajes separados desde la oficina
+    // (eso duplicaba el km cuando quedan cerca una de otra) — se toma como una sola salida
+    // de ida y vuelta hasta la más lejana de ellas.
+    const kmRespaldo = kmsManuales.length ? Math.max(...kmsManuales) * 2 : 0;
     if(faltan.some(c=>c)) renderClientes();
     statusEl.textContent = 'Una o más direcciones no se pudieron ubicar — se usó un km estimado para esos tramos (sin desglose por cliente).';
     statusEl.className = 'status-line err';
@@ -1253,13 +1270,15 @@ function revisarDiferenciaInicio(o){
   const anterior = lecturas[0];
   if(!anterior || anterior.km_termino==null) return;
   const gap = o.km_inicio - anterior.km_termino;
-  if(Math.abs(gap) < 1) return;
+  // Solo pedimos justificar cuando el vehículo se movió DE MÁS (gap positivo).
+  // Un gap negativo significaría que el odómetro "retrocedió", lo cual es un error de tipeo, no algo que justificar.
+  if(gap < 1) return;
   const veh = state.vehiculos.find(v=>v.id===o.vehiculo_id);
   const dias = Math.round((new Date(o.fecha) - new Date(anterior.fecha)) / 86400000);
   const periodo = dias>1 ? `entre el ${anterior.fecha} y el ${o.fecha} (fin de semana / ${dias} días)` : `entre el término del ${anterior.fecha} y el inicio del ${o.fecha}`;
   encolarJustificacion(
     `${veh?veh.nombre:'Este vehículo'} se movió ${gap.toFixed(1)} km ${periodo}, sin ruta registrada en ese lapso.`,
-    Math.abs(gap),
+    gap,
     { fecha: o.fecha, vehiculo_id: o.vehiculo_id, tecnico_id: o.tecnico_id||null }
   );
 }
@@ -1268,11 +1287,14 @@ function revisarDiferenciaOdometro(o){
   const recorrido = o.km_termino - o.km_inicio;
   const kmRutas = kmRutasDelDia(o.vehiculo_id, o.fecha);
   const diferencia = recorrido - kmRutas;
-  if(Math.abs(diferencia) < 1) return;
+  // Solo pedimos justificar cuando lo recorrido REAL fue mayor que lo que las rutas justifican.
+  // Si la teoría es mayor que lo real (diferencia negativa), no hay nada que el técnico deba justificar —
+  // significa que la ruta se sobreestimó, no que haya uso sin explicar. Se toma el real como válido, sin más.
+  if(diferencia < 1) return;
   const veh = state.vehiculos.find(v=>v.id===o.vehiculo_id);
   encolarJustificacion(
     `${veh?veh.nombre:'Este vehículo'} recorrió ${recorrido.toFixed(1)} km el ${o.fecha}, pero las rutas registradas ese día justifican ${kmRutas.toFixed(1)} km. Diferencia: ${diferencia.toFixed(1)} km.`,
-    Math.abs(diferencia),
+    diferencia,
     { fecha: o.fecha, vehiculo_id: o.vehiculo_id, tecnico_id: o.tecnico_id||null }
   );
 }
@@ -1669,7 +1691,7 @@ async function guardarJustificacionPersonal(vehiculo_id){
   state.kmPersonal.push(data);
   statusEl.textContent = 'Guardado ✓ recalculando...'; statusEl.className='status-line ok';
   renderKmPersonal();
-  renderResumen();
+  renderInformes();
 }
 function costoPorParadaMes(mes){
   const resultado = {};
@@ -1733,6 +1755,64 @@ function exportarCombustibleExcel(){
   exportarAExcel([{nombre:'Combustible', datos}], 'Gestion_KM_Combustible.xlsx');
 }
 
+function exportarInformeExcel(tipo){
+  const mes = document.getElementById('rs-mes').value;
+  const vehiculoFiltro = document.getElementById('rs-vehiculo').value;
+  const diaFiltro = document.getElementById('rs-dia').value;
+  if(!mes){ alert('Elige un mes primero.'); return; }
+
+  if(tipo==='resumen_vehiculo'){
+    const vehiculosAMostrar = vehiculoFiltro ? state.vehiculos.filter(v=>v.id===vehiculoFiltro) : state.vehiculos;
+    const datos = vehiculosAMostrar.map(v=>{
+      const rutasMes = state.rutas.filter(x=>x.vehiculo_id===v.id && x.fecha.startsWith(mes));
+      let kmTeorico = rutasMes.reduce((s,x)=>s+Number(x.km),0) + ajustesRutaMes(v.id, mes);
+      const kmReal = kmRealMes(v.id, mes);
+      const tieneOdometro = state.odometro.some(o=>o.vehiculo_id===v.id);
+      if(tieneOdometro && kmTeorico > kmReal) kmTeorico = kmReal;
+      const kmPersonalDeclarado = kmPersonalMes(v.id, mes);
+      const litrosMes = state.combustible.filter(x=>x.vehiculo_id===v.id && x.fecha.startsWith(mes)).reduce((s,x)=>s+Number(x.litros),0);
+      const costoMes = state.combustible.filter(x=>x.vehiculo_id===v.id && x.fecha.startsWith(mes)).reduce((s,x)=>s+(Number(x.costo)||0),0);
+      const litrosTrabajo = v.rendimiento ? (kmTeorico/v.rendimiento) : 0;
+      const diferenciaKm = kmReal - kmTeorico - kmPersonalDeclarado;
+      return {
+        'Vehículo': v.nombre, 'Km teórico (rutas)': Number(kmTeorico.toFixed(1)), 'Km personal declarado': Number(kmPersonalDeclarado.toFixed(1)),
+        'Km real (odómetro)': Number(kmReal.toFixed(1)), 'Km sin explicar': Number(diferenciaKm.toFixed(1)),
+        'Litros trabajo': Number(litrosTrabajo.toFixed(1)), 'Litros cargados': Number(litrosMes.toFixed(1)), 'Costo cargado ($)': Math.round(costoMes)
+      };
+    });
+    exportarAExcel([{nombre:'Resumen por vehículo', datos}], `Informe_ResumenVehiculo_${mes}.xlsx`);
+  } else if(tipo==='rendimiento'){
+    const datos = filasRendimiento(mes, vehiculoFiltro||null).map(f=>({
+      'Vehículo': f.vehiculo, 'Rendimiento declarado (km/l)': f.rendimientoDeclarado||'',
+      'Rendimiento real (km/l)': f.rendimientoReal?Number(f.rendimientoReal.toFixed(1)):'',
+      'Precio promedio $/L': f.precioPromedio?Math.round(f.precioPromedio):'',
+      'Costo/km declarado ($)': f.costoPorKmDeclarado?Math.round(f.costoPorKmDeclarado):'',
+      'Costo/km real ($)': f.costoPorKmReal?Math.round(f.costoPorKmReal):''
+    }));
+    exportarAExcel([{nombre:'Rendimiento y costo-km', datos}], `Informe_Rendimiento_${mes}.xlsx`);
+  } else if(tipo==='costo_cliente'){
+    const datos = costoPorParadaMes(mes).map(f=>({
+      'Cliente / Proveedor': f.nombre, 'Tipo': f.tipo==='proveedor'?'Proveedor':'Cliente', 'Visitas': f.visitas,
+      'Km total': Number(f.km.toFixed(1)), '$ por km': f.km>0?Math.round(f.costo/f.km):'', 'Costo combustible ($)': Math.round(f.costo)
+    }));
+    exportarAExcel([{nombre:'Costo por cliente-prov', datos}], `Informe_CostoCliente_${mes}.xlsx`);
+  } else if(tipo==='detalle_diario'){
+    let dias = detalleDiarioMes(mes, vehiculoFiltro||null);
+    if(diaFiltro) dias = dias.filter(d=>d.fecha===diaFiltro);
+    const datos = dias.map(d=>({
+      'Día': d.fecha, 'Km trabajo': Number(d.kmTrabajo.toFixed(1)), 'Km personal': Number(d.kmPersonal.toFixed(1)),
+      'Costo trabajo ($)': Math.round(d.costoTrabajo), 'Costo personal ($)': Math.round(d.costoPersonal),
+      'Acum. km trabajo': Number(d.accTrabajo.toFixed(1)), 'Acum. km personal': Number(d.accPersonal.toFixed(1)),
+      'Acum. costo trabajo ($)': Math.round(d.accCostoTrabajo), 'Acum. costo personal ($)': Math.round(d.accCostoPersonal)
+    }));
+    exportarAExcel([{nombre:'Detalle diario', datos}], `Informe_DetalleDiario_${mes}.xlsx`);
+  } else if(tipo==='personal_diario'){
+    let dias = detalleDiarioMes(mes, vehiculoFiltro||null).filter(d=>d.kmPersonal>0 || d.costoPersonal>0);
+    if(diaFiltro) dias = dias.filter(d=>d.fecha===diaFiltro);
+    const datos = dias.map(d=>({ 'Día': d.fecha, 'Km personal': Number(d.kmPersonal.toFixed(1)), 'Costo personal ($)': Math.round(d.costoPersonal) }));
+    exportarAExcel([{nombre:'Costo personal diario', datos}], `Informe_PersonalDiario_${mes}.xlsx`);
+  }
+}
 function exportarResumenExcel(){
   const mes = document.getElementById('rs-mes').value;
   if(!mes){ alert('Elige un mes primero.'); return; }
@@ -1740,8 +1820,10 @@ function exportarResumenExcel(){
 
   const hojaResumen = state.vehiculos.map(v=>{
     const rutasMes = state.rutas.filter(x=>x.vehiculo_id===v.id && x.fecha.startsWith(mes));
-    const kmTeorico = rutasMes.reduce((s,x)=>s+Number(x.km),0) + ajustesRutaMes(v.id, mes);
+    let kmTeorico = rutasMes.reduce((s,x)=>s+Number(x.km),0) + ajustesRutaMes(v.id, mes);
     const kmReal = kmRealMes(v.id, mes);
+    const tieneOdometro = state.odometro.some(o=>o.vehiculo_id===v.id);
+    if(tieneOdometro && kmTeorico > kmReal) kmTeorico = kmReal; // si la teoría queda por sobre el real, se confía en el odómetro
     const kmPersonalDeclarado = kmPersonalMes(v.id, mes);
     const litrosMes = state.combustible.filter(x=>x.vehiculo_id===v.id && x.fecha.startsWith(mes)).reduce((s,x)=>s+Number(x.litros),0);
     const costoMes = state.combustible.filter(x=>x.vehiculo_id===v.id && x.fecha.startsWith(mes)).reduce((s,x)=>s+(Number(x.costo)||0),0);
@@ -1758,6 +1840,14 @@ function exportarResumenExcel(){
       'Costo combustible cargado ($)': Math.round(costoMes),
     };
   });
+
+  const hojaRendimiento = filasRendimiento(mes, null).map(f=>({
+    'Vehículo': f.vehiculo, 'Rendimiento declarado (km/l)': f.rendimientoDeclarado||'',
+    'Rendimiento real (km/l)': f.rendimientoReal?Number(f.rendimientoReal.toFixed(1)):'',
+    'Precio promedio $/L': f.precioPromedio?Math.round(f.precioPromedio):'',
+    'Costo/km declarado ($)': f.costoPorKmDeclarado?Math.round(f.costoPorKmDeclarado):'',
+    'Costo/km real ($)': f.costoPorKmReal?Math.round(f.costoPorKmReal):''
+  }));
 
   const hojaCostoParada = costoPorParadaMes(mes).map(f=>({
     'Cliente / Proveedor': f.nombre, 'Tipo': f.tipo==='proveedor'?'Proveedor':'Cliente',
@@ -1795,6 +1885,7 @@ function exportarResumenExcel(){
 
   exportarAExcel([
     {nombre:'Resumen por vehículo', datos: hojaResumen},
+    {nombre:'Rendimiento y costo-km', datos: hojaRendimiento},
     {nombre:'Detalle diario', datos: hojaDiario},
     {nombre:'Costo por cliente-prov', datos: hojaCostoParada},
     {nombre:'Rutas', datos: hojaRutas},
@@ -1817,11 +1908,14 @@ function detalleDiarioMes(mes, vehiculoFiltro){
   return fechasOrdenadas.map(fecha=>{
     let kmTrabajo=0, kmPersonal=0, costoTrabajo=0, costoPersonal=0, kmReal=0;
     vehiculos.forEach(v=>{
-      const kmT = kmRutasDelDia(v.id, fecha); // ya incluye ajustes de ruta
+      let kmT = kmRutasDelDia(v.id, fecha); // ya incluye ajustes de ruta
       const kmP = state.kmPersonal.filter(k=>k.vehiculo_id===v.id && k.fecha===fecha).reduce((s,k)=>s+Number(k.km),0);
-      kmTrabajo += kmT; kmPersonal += kmP;
       const odo = state.odometro.find(o=>o.vehiculo_id===v.id && o.fecha===fecha);
-      if(odo && odo.km_inicio!=null && odo.km_termino!=null) kmReal += (odo.km_termino - odo.km_inicio);
+      let kmRealDia = null;
+      if(odo && odo.km_inicio!=null && odo.km_termino!=null) kmRealDia = odo.km_termino - odo.km_inicio;
+      if(kmRealDia!=null && kmT > kmRealDia) kmT = kmRealDia; // si la teoría del día supera lo real, se confía en el odómetro
+      kmTrabajo += kmT; kmPersonal += kmP;
+      if(kmRealDia!=null) kmReal += kmRealDia;
       const cpk = costoPorKmVehiculoMes(v.id, mes);
       if(cpk){ costoTrabajo += kmT*cpk; costoPersonal += kmP*cpk; }
     });
@@ -1830,17 +1924,146 @@ function detalleDiarioMes(mes, vehiculoFiltro){
     return { fecha, kmTrabajo, kmPersonal, kmReal, costoTrabajo, costoPersonal, accTrabajo, accPersonal, accCostoTrabajo, accCostoPersonal };
   });
 }
-function renderResumen(){
+// ---- DESPACHADOR DE INFORMES ----
+function renderInformes(){
+  const tipo = document.getElementById('informe-tipo').value;
+  const el = document.getElementById('informe-contenido');
+  if(!tipo){ el.innerHTML = '<p class="empty">Elige un informe de la lista de arriba para verlo aquí.</p>'; return; }
+  if(tipo==='resumen_vehiculo') renderInformeResumenVehiculo();
+  else if(tipo==='rendimiento') renderInformeRendimiento();
+  else if(tipo==='costo_cliente') renderInformeCostoCliente();
+  else if(tipo==='detalle_diario') renderInformeDetalleDiario();
+  else if(tipo==='personal_diario') renderInformePersonalDiario();
+}
+
+// ---- INFORME: Rendimiento real y costo por km ----
+function rendimientoRealMes(vehiculo_id, mes){
+  const kmReal = kmRealMes(vehiculo_id, mes);
+  const cargas = state.combustible.filter(c=>c.vehiculo_id===vehiculo_id && c.fecha.startsWith(mes));
+  const litros = cargas.reduce((s,c)=>s+Number(c.litros),0);
+  if(litros<=0 || kmReal<=0) return null;
+  return kmReal/litros;
+}
+function filasRendimiento(mes, vehiculoFiltro){
+  const vehiculos = vehiculoFiltro ? state.vehiculos.filter(v=>v.id===vehiculoFiltro) : state.vehiculos;
+  return vehiculos.map(v=>{
+    const cargas = state.combustible.filter(c=>c.vehiculo_id===v.id && c.fecha.startsWith(mes));
+    const litros = cargas.reduce((s,c)=>s+Number(c.litros),0);
+    const costo = cargas.reduce((s,c)=>s+(Number(c.costo)||0),0);
+    const precioPromedio = (litros>0 && costo>0) ? costo/litros : null;
+    const rendimientoReal = rendimientoRealMes(v.id, mes);
+    const costoPorKmDeclarado = (precioPromedio && v.rendimiento) ? precioPromedio/v.rendimiento : null;
+    const costoPorKmReal = (precioPromedio && rendimientoReal) ? precioPromedio/rendimientoReal : null;
+    return { vehiculo:v.nombre, rendimientoDeclarado:v.rendimiento||null, rendimientoReal, precioPromedio, costoPorKmDeclarado, costoPorKmReal, litros, kmReal:kmRealMes(v.id,mes) };
+  });
+}
+function renderInformeRendimiento(){
   const mes = document.getElementById('rs-mes').value;
   const vehiculoFiltro = document.getElementById('rs-vehiculo').value;
-  const el = document.getElementById('lista-resumen');
+  const el = document.getElementById('informe-contenido');
+  if(!mes){ el.innerHTML = '<p class="empty">Elige un mes para ver el informe.</p>'; return; }
+  const filas = filasRendimiento(mes, vehiculoFiltro || null);
+  el.innerHTML = `<div class="card">
+    <div class="row-actions" style="margin-top:0;"><button class="ghost" onclick="exportarInformeExcel('rendimiento')">📊 Exportar este informe a Excel</button></div>
+    <h2 style="font-size:14.5px; margin:10px 0 10px;">⚙️ Rendimiento real y costo por km</h2>
+    <p class="hint" style="margin-bottom:10px;">Compara el rendimiento que declaraste por vehículo con el rendimiento real (según odómetro y litros cargados), y el costo por km que resulta de cada uno.</p>
+    <table><thead><tr><th>Vehículo</th><th>Rendimiento declarado</th><th>Rendimiento real</th><th>Precio promedio $/L</th><th>Costo/km (declarado)</th><th>Costo/km (real)</th></tr></thead><tbody>
+      ${filas.map(f=>`<tr>
+        <td>${f.vehiculo}</td>
+        <td class="mono">${f.rendimientoDeclarado?f.rendimientoDeclarado+' km/l':'—'}</td>
+        <td class="mono">${f.rendimientoReal?f.rendimientoReal.toFixed(1)+' km/l':'—'}</td>
+        <td class="mono">${f.precioPromedio?'$'+Math.round(f.precioPromedio).toLocaleString('es-CL'):'—'}</td>
+        <td class="mono">${f.costoPorKmDeclarado?'$'+Math.round(f.costoPorKmDeclarado).toLocaleString('es-CL'):'—'}</td>
+        <td class="mono">${f.costoPorKmReal?'$'+Math.round(f.costoPorKmReal).toLocaleString('es-CL'):'—'}</td>
+      </tr>`).join('')}
+    </tbody></table>
+    <p class="save-note">"Real" se calcula con el km del odómetro y los litros cargados ese mes — si sale muy distinto del declarado, vale la pena revisar si el vehículo realmente rinde lo que se pensaba.</p>
+  </div>`;
+}
+
+// ---- INFORME: Costo por cliente / proveedor ----
+function renderInformeCostoCliente(){
+  const mes = document.getElementById('rs-mes').value;
+  const el = document.getElementById('informe-contenido');
+  if(!mes){ el.innerHTML = '<p class="empty">Elige un mes para ver el informe.</p>'; return; }
+  const filasCosto = costoPorParadaMes(mes);
+  el.innerHTML = `<div class="card">
+    <div class="row-actions" style="margin-top:0;"><button class="ghost" onclick="exportarInformeExcel('costo_cliente')">📊 Exportar este informe a Excel</button></div>
+    <h2 style="font-size:14.5px; margin:10px 0 10px;">⛽ Costo de combustible por cliente / proveedor</h2>
+    ${!filasCosto.length ? '<p class="empty">Aún no hay rutas calculadas automáticamente este mes con desglose por parada (solo aplica a rutas calculadas con el botón automático, no a las guardadas con km manual).</p>' : `
+    <table><thead><tr><th>Cliente / Proveedor</th><th>Tipo</th><th>Visitas</th><th>Km total</th><th>$ por km</th><th>Costo combustible</th></tr></thead><tbody>
+      ${filasCosto.map(f=>`<tr><td>${f.nombre}</td><td>${f.tipo==='proveedor'?'🧰 Proveedor':'Cliente'}</td><td class="mono">${f.visitas}</td><td class="mono">${f.km.toFixed(1)} km</td><td class="mono">${f.km>0?'$'+Math.round(f.costo/f.km).toLocaleString('es-CL'):'—'}</td><td class="mono">$${Math.round(f.costo).toLocaleString('es-CL')}</td></tr>`).join('')}
+    </tbody></table>
+    <p class="save-note">Calculado con el tramo real hasta cada parada (según la ruta calculada) y el precio promedio del combustible de ese vehículo ese mes.</p>`}
+  </div>`;
+}
+
+// ---- INFORME: Detalle diario (trabajo y personal) ----
+function renderInformeDetalleDiario(){
+  const mes = document.getElementById('rs-mes').value;
+  const vehiculoFiltro = document.getElementById('rs-vehiculo').value;
+  const diaFiltro = document.getElementById('rs-dia').value;
+  const el = document.getElementById('informe-contenido');
+  if(!mes){ el.innerHTML = '<p class="empty">Elige un mes para ver el informe.</p>'; return; }
+  let dias = detalleDiarioMes(mes, vehiculoFiltro || null);
+  if(diaFiltro) dias = dias.filter(d=>d.fecha===diaFiltro);
+  el.innerHTML = `<div class="card">
+    <div class="row-actions" style="margin-top:0;"><button class="ghost" onclick="exportarInformeExcel('detalle_diario')">📊 Exportar este informe a Excel</button></div>
+    <h2 style="font-size:14.5px; margin:10px 0 10px;">📅 Detalle diario y acumulado del mes</h2>
+    ${!dias.length ? `<p class="empty">${diaFiltro?`No hay datos registrados para el ${diaFiltro}.`:'Aún no hay datos registrados este mes.'}</p>` : `
+    <table><thead><tr>
+      <th>Día</th><th>Km trabajo</th><th>Km personal</th><th>Costo trabajo</th><th>Costo personal</th>
+      <th>Acum. km trabajo</th><th>Acum. km personal</th><th>Acum. costo trabajo</th><th>Acum. costo personal</th>
+    </tr></thead><tbody>
+      ${dias.map(d=>`<tr>
+        <td class="mono">${d.fecha}</td>
+        <td class="mono">${d.kmTrabajo.toFixed(1)}</td>
+        <td class="mono">${d.kmPersonal.toFixed(1)}</td>
+        <td class="mono">$${Math.round(d.costoTrabajo).toLocaleString('es-CL')}</td>
+        <td class="mono">$${Math.round(d.costoPersonal).toLocaleString('es-CL')}</td>
+        <td class="mono" style="color:var(--ink-soft);">${d.accTrabajo.toFixed(1)}</td>
+        <td class="mono" style="color:var(--ink-soft);">${d.accPersonal.toFixed(1)}</td>
+        <td class="mono" style="color:var(--ink-soft);">$${Math.round(d.accCostoTrabajo).toLocaleString('es-CL')}</td>
+        <td class="mono" style="color:var(--ink-soft);">$${Math.round(d.accCostoPersonal).toLocaleString('es-CL')}</td>
+      </tr>`).join('')}
+    </tbody></table>
+    <p class="save-note">Las columnas "Acum." muestran el total acumulado desde el inicio del mes hasta ese día — la última fila es el total del mes. ${vehiculoFiltro?'':'Suma todos los vehículos; usa el filtro de vehículo de arriba para ver uno solo.'}</p>`}
+  </div>`;
+}
+
+// ---- INFORME: Costo diario de uso personal ----
+function renderInformePersonalDiario(){
+  const mes = document.getElementById('rs-mes').value;
+  const vehiculoFiltro = document.getElementById('rs-vehiculo').value;
+  const diaFiltro = document.getElementById('rs-dia').value;
+  const el = document.getElementById('informe-contenido');
+  if(!mes){ el.innerHTML = '<p class="empty">Elige un mes para ver el informe.</p>'; return; }
+  let dias = detalleDiarioMes(mes, vehiculoFiltro || null).filter(d=>d.kmPersonal>0 || d.costoPersonal>0);
+  if(diaFiltro) dias = dias.filter(d=>d.fecha===diaFiltro);
+  const totalKm = dias.reduce((s,d)=>s+d.kmPersonal,0);
+  const totalCosto = dias.reduce((s,d)=>s+d.costoPersonal,0);
+  el.innerHTML = `<div class="card">
+    <div class="row-actions" style="margin-top:0;"><button class="ghost" onclick="exportarInformeExcel('personal_diario')">📊 Exportar este informe a Excel</button></div>
+    <h2 style="font-size:14.5px; margin:10px 0 10px;">🚗 Costo diario de uso personal</h2>
+    ${!dias.length ? '<p class="empty">No hay uso personal registrado en el período elegido.</p>' : `
+    <table><thead><tr><th>Día</th><th>Km personal</th><th>Costo personal</th></tr></thead><tbody>
+      ${dias.map(d=>`<tr><td class="mono">${d.fecha}</td><td class="mono">${d.kmPersonal.toFixed(1)} km</td><td class="mono">$${Math.round(d.costoPersonal).toLocaleString('es-CL')}</td></tr>`).join('')}
+    </tbody></table>
+    <p class="save-note" style="font-weight:700;">Total del período: ${totalKm.toFixed(1)} km — $${Math.round(totalCosto).toLocaleString('es-CL')}</p>`}
+  </div>`;
+}
+
+function renderInformeResumenVehiculo(){
+  const mes = document.getElementById('rs-mes').value;
+  const vehiculoFiltro = document.getElementById('rs-vehiculo').value;
+  const el = document.getElementById('informe-contenido');
   if(!state.vehiculos.length){ el.innerHTML='<p class="empty">Agrega vehículos primero.</p>'; return; }
-  if(!mes){ el.innerHTML='<p class="empty">Elige un mes para ver el resumen.</p>'; return; }
+  if(!mes){ el.innerHTML='<p class="empty">Elige un mes para ver el informe.</p>'; return; }
 
   const vehiculosAMostrar = vehiculoFiltro ? state.vehiculos.filter(v=>v.id===vehiculoFiltro) : state.vehiculos;
   const filas = vehiculosAMostrar.map(v=>{
     const rutasMes = state.rutas.filter(x=>x.vehiculo_id===v.id && x.fecha.startsWith(mes));
-    const kmTeorico = rutasMes.reduce((s,x)=>s+Number(x.km),0) + ajustesRutaMes(v.id, mes);
+    let kmTeorico = rutasMes.reduce((s,x)=>s+Number(x.km),0) + ajustesRutaMes(v.id, mes);
     const idasProveedor = rutasMes.reduce((s,r)=>{
       const paradasProveedor = (r.paradas||[]).filter(cid=>{
         const c = state.clientes.find(x=>x.id===cid);
@@ -1849,6 +2072,8 @@ function renderResumen(){
       return s + paradasProveedor.length;
     }, 0);
     const kmReal = kmRealMes(v.id, mes);
+    const tieneOdometro = state.odometro.some(o=>o.vehiculo_id===v.id);
+    if(tieneOdometro && kmTeorico > kmReal) kmTeorico = kmReal; // si la teoría queda por sobre el real, se confía en el odómetro
     const cargasMes = state.combustible.filter(x=>x.vehiculo_id===v.id && x.fecha.startsWith(mes));
     const litrosMes = cargasMes.reduce((s,x)=>s+Number(x.litros),0);
     const costoMes = cargasMes.reduce((s,x)=>s+(Number(x.costo)||0),0);
@@ -1858,7 +2083,6 @@ function renderResumen(){
     const kmPersonalDeclarado = kmPersonalMes(v.id, mes);
     const kmJustificado = kmTeorico + kmPersonalDeclarado;
     const diferenciaKm = kmReal - kmJustificado;
-    const tieneOdometro = state.odometro.some(o=>o.vehiculo_id===v.id);
     const pctExcesoKm = (tieneOdometro && kmJustificado>0) ? (diferenciaKm/kmJustificado*100) : null;
     const litrosPorDiferenciaKm = (tieneOdometro && diferenciaKm>0 && v.rendimiento) ? (diferenciaKm / v.rendimiento) : 0;
 
@@ -1927,7 +2151,9 @@ function renderResumen(){
   }).join('');
 
   el.innerHTML = `
-  <h2 style="font-size:14.5px; margin:0 0 10px;">🔎 ¿Cuánto uso personal pagó la empresa este mes?</h2>
+  <div class="card">
+  <div class="row-actions" style="margin-top:0;"><button class="ghost" onclick="exportarInformeExcel('resumen_vehiculo')">📊 Exportar este informe a Excel</button></div>
+  <h2 style="font-size:14.5px; margin:10px 0 10px;">🔎 ¿Cuánto uso personal pagó la empresa este mes?</h2>
   ${resumenClave}
   <p class="save-note" style="margin-bottom:18px;">Esto sale de comparar lo que el trabajo necesitó, lo que se cargó, y el km sin explicar del odómetro. Es una referencia para conversar, no un descuento automático.</p>
 
@@ -1952,42 +2178,7 @@ function renderResumen(){
   </tbody></table>
   <p class="save-note">"Km personal declarado" ya se suma como justificado — no genera alerta. "Dif. km sin explicar" es lo que queda después de descontar rutas de trabajo Y km personal declarado — esa es la señal real de algo no reconocido.<br>
   "Litros trabajo" es lo que las rutas registradas necesitaban. Si "Litros cargados" es mayor, esa diferencia es sospechosa de cubrir uso personal — por eso se compara con el km sin explicar para armar el número clave de arriba.</p>
-
-  <h2 style="font-size:14.5px; margin:18px 0 10px;">📅 Detalle diario y acumulado del mes</h2>
-  ${(() => {
-    const diaFiltro = document.getElementById('rs-dia').value;
-    let dias = detalleDiarioMes(mes, vehiculoFiltro || null);
-    if(!dias.length) return '<p class="empty">Aún no hay datos registrados este mes.</p>';
-    if(diaFiltro) dias = dias.filter(d=>d.fecha===diaFiltro);
-    if(diaFiltro && !dias.length) return `<p class="empty">No hay datos registrados para el ${diaFiltro}.</p>`;
-    return `<table><thead><tr>
-      <th>Día</th><th>Km trabajo</th><th>Km personal</th><th>Costo trabajo</th><th>Costo personal</th>
-      <th>Acum. km trabajo</th><th>Acum. km personal</th><th>Acum. costo trabajo</th><th>Acum. costo personal</th>
-    </tr></thead><tbody>
-      ${dias.map(d=>`<tr>
-        <td class="mono">${d.fecha}</td>
-        <td class="mono">${d.kmTrabajo.toFixed(1)}</td>
-        <td class="mono">${d.kmPersonal.toFixed(1)}</td>
-        <td class="mono">$${Math.round(d.costoTrabajo).toLocaleString('es-CL')}</td>
-        <td class="mono">$${Math.round(d.costoPersonal).toLocaleString('es-CL')}</td>
-        <td class="mono" style="color:var(--ink-soft);">${d.accTrabajo.toFixed(1)}</td>
-        <td class="mono" style="color:var(--ink-soft);">${d.accPersonal.toFixed(1)}</td>
-        <td class="mono" style="color:var(--ink-soft);">$${Math.round(d.accCostoTrabajo).toLocaleString('es-CL')}</td>
-        <td class="mono" style="color:var(--ink-soft);">$${Math.round(d.accCostoPersonal).toLocaleString('es-CL')}</td>
-      </tr>`).join('')}
-    </tbody></table>
-    <p class="save-note">Las columnas "Acum." muestran el total acumulado desde el inicio del mes hasta ese día — la última fila es el total del mes. ${vehiculoFiltro?'':'Suma todos los vehículos; usa el filtro de vehículo de arriba para ver uno solo.'}</p>`;
-  })()}
-
-  <h2 style="font-size:14.5px; margin:18px 0 10px;">⛽ Costo de combustible por cliente / proveedor</h2>
-  ${(() => {
-    const filasCosto = costoPorParadaMes(mes);
-    if(!filasCosto.length) return '<p class="empty">Aún no hay rutas calculadas automáticamente este mes con desglose por parada (solo aplica a rutas calculadas con el botón automático, no a las guardadas con km manual).</p>';
-    return `<table><thead><tr><th>Cliente / Proveedor</th><th>Tipo</th><th>Visitas</th><th>Km total</th><th>Costo combustible</th></tr></thead><tbody>
-      ${filasCosto.map(f=>`<tr><td>${f.nombre}</td><td>${f.tipo==='proveedor'?'🧰 Proveedor':'Cliente'}</td><td class="mono">${f.visitas}</td><td class="mono">${f.km.toFixed(1)} km</td><td class="mono">$${Math.round(f.costo).toLocaleString('es-CL')}</td></tr>`).join('')}
-    </tbody></table>
-    <p class="save-note">Calculado con el tramo real hasta cada parada (según la ruta calculada) y el precio promedio del combustible de ese vehículo ese mes.</p>`;
-  })()}`;
+  </div>`;
 }
 
 // ---- SELECTS ----
