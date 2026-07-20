@@ -367,7 +367,7 @@
           <select id="informe-tipo" onchange="renderInformes()">
             <option value="">— Elige un informe —</option>
             <option value="resumen_vehiculo">Resumen por vehículo (uso personal pagado por la empresa)</option>
-            <option value="rendimiento">Rendimiento real y costo por km</option>
+            <option value="rendimiento">Rendimiento real (trabajo) y costo por km</option>
             <option value="costo_cliente">Costo por cliente / proveedor</option>
             <option value="detalle_diario">Detalle diario (trabajo y personal, con acumulado)</option>
             <option value="personal_diario">Costo diario de uso personal</option>
@@ -1784,12 +1784,12 @@ function exportarInformeExcel(tipo){
   } else if(tipo==='rendimiento'){
     const datos = filasRendimiento(mes, vehiculoFiltro||null).map(f=>({
       'Vehículo': f.vehiculo, 'Rendimiento declarado (km/l)': f.rendimientoDeclarado||'',
-      'Rendimiento real (km/l)': f.rendimientoReal?Number(f.rendimientoReal.toFixed(1)):'',
+      'Rendimiento real trabajo (km/l)': f.rendimientoReal?Number(f.rendimientoReal.toFixed(1)):'',
       'Precio promedio $/L': f.precioPromedio?Math.round(f.precioPromedio):'',
       'Costo/km declarado ($)': f.costoPorKmDeclarado?Math.round(f.costoPorKmDeclarado):'',
-      'Costo/km real ($)': f.costoPorKmReal?Math.round(f.costoPorKmReal):''
+      'Costo/km real trabajo ($)': f.costoPorKmReal?Math.round(f.costoPorKmReal):''
     }));
-    exportarAExcel([{nombre:'Rendimiento y costo-km', datos}], `Informe_Rendimiento_${mes}.xlsx`);
+    exportarAExcel([{nombre:'Rendimiento trabajo', datos}], `Informe_Rendimiento_${mes}.xlsx`);
   } else if(tipo==='costo_cliente'){
     const datos = costoPorParadaMes(mes).map(f=>({
       'Cliente / Proveedor': f.nombre, 'Tipo': f.tipo==='proveedor'?'Proveedor':'Cliente', 'Visitas': f.visitas,
@@ -1843,10 +1843,10 @@ function exportarResumenExcel(){
 
   const hojaRendimiento = filasRendimiento(mes, null).map(f=>({
     'Vehículo': f.vehiculo, 'Rendimiento declarado (km/l)': f.rendimientoDeclarado||'',
-    'Rendimiento real (km/l)': f.rendimientoReal?Number(f.rendimientoReal.toFixed(1)):'',
+    'Rendimiento real trabajo (km/l)': f.rendimientoReal?Number(f.rendimientoReal.toFixed(1)):'',
     'Precio promedio $/L': f.precioPromedio?Math.round(f.precioPromedio):'',
     'Costo/km declarado ($)': f.costoPorKmDeclarado?Math.round(f.costoPorKmDeclarado):'',
-    'Costo/km real ($)': f.costoPorKmReal?Math.round(f.costoPorKmReal):''
+    'Costo/km real trabajo ($)': f.costoPorKmReal?Math.round(f.costoPorKmReal):''
   }));
 
   const hojaCostoParada = costoPorParadaMes(mes).map(f=>({
@@ -1885,7 +1885,7 @@ function exportarResumenExcel(){
 
   exportarAExcel([
     {nombre:'Resumen por vehículo', datos: hojaResumen},
-    {nombre:'Rendimiento y costo-km', datos: hojaRendimiento},
+    {nombre:'Rendimiento trabajo', datos: hojaRendimiento},
     {nombre:'Detalle diario', datos: hojaDiario},
     {nombre:'Costo por cliente-prov', datos: hojaCostoParada},
     {nombre:'Rutas', datos: hojaRutas},
@@ -1938,11 +1938,18 @@ function renderInformes(){
 
 // ---- INFORME: Rendimiento real y costo por km ----
 function rendimientoRealMes(vehiculo_id, mes){
+  // Usa solo el km de TRABAJO (rutas + ajustes), no el km total real —
+  // porque el combustible personal no lo carga la empresa y no queda registrado,
+  // así que mezclarlo con el km total infla el rendimiento "real" artificialmente.
+  const rutasMes = state.rutas.filter(x=>x.vehiculo_id===vehiculo_id && x.fecha.startsWith(mes));
+  let kmTrabajo = rutasMes.reduce((s,x)=>s+Number(x.km),0) + ajustesRutaMes(vehiculo_id, mes);
   const kmReal = kmRealMes(vehiculo_id, mes);
+  const tieneOdometro = state.odometro.some(o=>o.vehiculo_id===vehiculo_id);
+  if(tieneOdometro && kmTrabajo > kmReal) kmTrabajo = kmReal; // mismo tope que en los demás informes
   const cargas = state.combustible.filter(c=>c.vehiculo_id===vehiculo_id && c.fecha.startsWith(mes));
   const litros = cargas.reduce((s,c)=>s+Number(c.litros),0);
-  if(litros<=0 || kmReal<=0) return null;
-  return kmReal/litros;
+  if(litros<=0 || kmTrabajo<=0) return null;
+  return kmTrabajo/litros;
 }
 function filasRendimiento(mes, vehiculoFiltro){
   const vehiculos = vehiculoFiltro ? state.vehiculos.filter(v=>v.id===vehiculoFiltro) : state.vehiculos;
@@ -1965,9 +1972,9 @@ function renderInformeRendimiento(){
   const filas = filasRendimiento(mes, vehiculoFiltro || null);
   el.innerHTML = `<div class="card">
     <div class="row-actions" style="margin-top:0;"><button class="ghost" onclick="exportarInformeExcel('rendimiento')">📊 Exportar este informe a Excel</button></div>
-    <h2 style="font-size:14.5px; margin:10px 0 10px;">⚙️ Rendimiento real y costo por km</h2>
-    <p class="hint" style="margin-bottom:10px;">Compara el rendimiento que declaraste por vehículo con el rendimiento real (según odómetro y litros cargados), y el costo por km que resulta de cada uno.</p>
-    <table><thead><tr><th>Vehículo</th><th>Rendimiento declarado</th><th>Rendimiento real</th><th>Precio promedio $/L</th><th>Costo/km (declarado)</th><th>Costo/km (real)</th></tr></thead><tbody>
+    <h2 style="font-size:14.5px; margin:10px 0 10px;">⚙️ Rendimiento real (trabajo) y costo por km</h2>
+    <p class="hint" style="margin-bottom:10px;">Compara el rendimiento que declaraste por vehículo con el rendimiento real de trabajo (litros que carga la empresa ÷ km de rutas, sin contar el km personal — ese combustible se supone que lo pone cada técnico y no queda registrado aquí).</p>
+    <table><thead><tr><th>Vehículo</th><th>Rendimiento declarado</th><th>Rendimiento real (trabajo)</th><th>Precio promedio $/L</th><th>Costo/km (declarado)</th><th>Costo/km (real, trabajo)</th></tr></thead><tbody>
       ${filas.map(f=>`<tr>
         <td>${f.vehiculo}</td>
         <td class="mono">${f.rendimientoDeclarado?f.rendimientoDeclarado+' km/l':'—'}</td>
@@ -1977,7 +1984,7 @@ function renderInformeRendimiento(){
         <td class="mono">${f.costoPorKmReal?'$'+Math.round(f.costoPorKmReal).toLocaleString('es-CL'):'—'}</td>
       </tr>`).join('')}
     </tbody></table>
-    <p class="save-note">"Real" se calcula con el km del odómetro y los litros cargados ese mes — si sale muy distinto del declarado, vale la pena revisar si el vehículo realmente rinde lo que se pensaba.</p>
+    <p class="save-note">"Real (trabajo)" usa solo el km de rutas de trabajo (con el mismo tope al odómetro que el resto de los informes) — no incluye km personal, porque ese combustible no lo paga ni lo registra la empresa. Si sale muy distinto del declarado, vale la pena revisar si el vehículo realmente rinde lo que se pensaba.</p>
   </div>`;
 }
 
